@@ -386,6 +386,106 @@ def beams_per_frequency(freq_mhz, beam, tol_hz=1.0):
 
 
 # ----------------------------------------------------------------------------
+# cmd: beams -- why the aggregate hits-per-beam histogram has steps
+# ----------------------------------------------------------------------------
+
+def cmd_beams(args):
+    """
+    Explain the step structure in the hits-per-beam histogram.
+
+    Aggregated over a whole file, hits-per-beam is flat up to some beam index
+    and then steps down. That is not a beamformer defect: BLUSE assigns one
+    coherent beam per catalogue target inside the primary field of view, and
+    a sparse patch of sky simply has fewer targets to assign. Beams are then
+    filled contiguously from 0, so a pointing with 49 targets populates beams
+    0-48 and leaves 49-63 empty. Summed over many pointings, the steps appear
+    at whatever beam counts are common in the sample.
+
+    Four panels: the aggregate histogram with its steps; how many observations
+    reach each beam index; beams-formed against galactic latitude, which is the
+    underlying cause; and the beam-vs-observation occupancy map.
+    """
+    f = resolve_files([args.file])[0]
+    name = os.path.basename(f).replace(".h5", "")
+    with h5py.File(f, "r") as h:
+        beam = h["beam"][:]
+        obs = decode(h["obsid"][:])
+        src = decode(h["sourceName"][:])
+        ra = h["ra"][:]
+        dec = h["dec"][:]
+
+    uo = np.unique(obs)
+    n_formed, gal_b, bijective, contiguous = [], [], [], []
+    occupancy = np.zeros((len(uo), 64), dtype=bool)
+
+    for i, o in enumerate(uo):
+        m = obs == o
+        b, s = beam[m], src[m]
+        ub = np.unique(b)
+        occupancy[i, ub] = True
+        n_formed.append(ub.max() + 1)
+        # one beam per target? count distinct (beam, source) pairs
+        pairs = len(np.unique(np.char.add(b.astype(str), s)))
+        bijective.append(pairs == len(ub) and len(ub) == len(np.unique(s)))
+        contiguous.append(len(ub) == ub.max() + 1)
+        gal_b.append(abs(galactic_latitude(ra[m].mean() * 15.0, dec[m].mean())))
+
+    n_formed = np.array(n_formed)
+    gal_b = np.array(gal_b)
+
+    print(f"  {name}: {len(uo)} observations")
+    print(f"    beam<->source is 1:1 in {sum(bijective)}/{len(uo)} observations")
+    print(f"    beam indices contiguous from 0 in {sum(contiguous)}/{len(uo)}")
+    print(f"    beams formed: min {n_formed.min()}, max {n_formed.max()}, "
+          f"median {int(np.median(n_formed))}")
+    vals, cnts = np.unique(n_formed, return_counts=True)
+    print("    distribution: " + "  ".join(f"{v}:{c}" for v, c in zip(vals, cnts)))
+
+    fig, ax = plt.subplots(2, 2, figsize=(15, 9))
+    fig.suptitle(f"{name}  --  why hits-per-beam has steps", fontsize=13)
+
+    a = ax[0, 0]
+    beams, counts = np.unique(beam, return_counts=True)
+    a.bar(beams, counts, width=1.0, color="#7a5c9e")
+    for edge in np.unique(n_formed):
+        if 0 < edge < 64:
+            a.axvline(edge - 0.5, color="#c0392b", ls="--", lw=1, alpha=0.8)
+    a.set_xlabel("beam"); a.set_ylabel("hits")
+    a.set_title("aggregate hits per beam\n(dashed: beam counts present in sample)")
+
+    a = ax[0, 1]
+    reach = occupancy.sum(axis=0)
+    a.bar(np.arange(64), reach, width=1.0, color="#3b6ea5")
+    a.set_xlabel("beam"); a.set_ylabel("observations reaching this beam")
+    a.set_title("every step is an observation that formed fewer beams")
+
+    a = ax[1, 0]
+    a.scatter(gal_b, n_formed, s=45, alpha=0.75, color="#4a7c59",
+              edgecolor="k", linewidth=0.4)
+    a.set_xlabel("|galactic latitude| of field centre [deg]")
+    a.set_ylabel("beams formed")
+    a.set_title("the cause: sparse sky has fewer targets to point at")
+
+    a = ax[1, 1]
+    a.imshow(occupancy[np.argsort(n_formed)], aspect="auto",
+             cmap="Greys", interpolation="nearest")
+    a.set_xlabel("beam"); a.set_ylabel("observation (sorted by beams formed)")
+    a.set_title("beam occupancy per observation")
+
+    fig.tight_layout()
+    savefig(fig, f"{name}_beams.png")
+
+
+def galactic_latitude(ra_deg, dec_deg):
+    """Galactic latitude in degrees. Good enough for a diagnostic plot."""
+    r, d = np.radians(ra_deg), np.radians(dec_deg)
+    ngp_ra, ngp_dec = np.radians(192.8595), np.radians(27.1284)
+    sb = (np.sin(ngp_dec) * np.sin(d)
+          + np.cos(ngp_dec) * np.cos(d) * np.cos(r - ngp_ra))
+    return np.degrees(np.arcsin(np.clip(sb, -1, 1)))
+
+
+# ----------------------------------------------------------------------------
 # cmd: coincidence
 # ----------------------------------------------------------------------------
 
@@ -463,6 +563,10 @@ def main():
     s.add_argument("--obsid", default=None)
     s.add_argument("--tol", type=float, default=1.0, help="Hz")
     s.set_defaults(func=cmd_obs)
+
+    s = sub.add_parser("beams", help="explain the hits-per-beam step structure")
+    s.add_argument("file")
+    s.set_defaults(func=cmd_beams)
 
     s = sub.add_parser("coincidence", help="multi-beam coincidence statistics")
     s.add_argument("file")

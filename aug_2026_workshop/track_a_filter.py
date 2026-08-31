@@ -205,6 +205,21 @@ def cut_multibeam(df, tol_hz, tol_steps, max_beams, verbose=True):
         print(" " * 70, end="\r")
 
     df["n_beams"] = nb
+
+    # Beams formed in each observation. BLUSE assigns one coherent beam per
+    # catalogue target in the primary field of view and fills them contiguously
+    # from 0, so a sparse patch of sky forms fewer than 64 beams -- we see as
+    # few as 20 at high galactic latitude. The coincidence denominator therefore
+    # varies, and `beam_frac` is the denominator-aware version of `n_beams`.
+    #
+    # We keep the absolute threshold: switching the cut to a fixed fraction
+    # (6.25%, i.e. 4/64) changes the survivor count across all seven files by
+    # 7 hits out of 7,143, all of them in the pre-filtered mk_sample_hits. Not
+    # worth a knob. The columns are recorded because Tracks B/E may want them.
+    formed = df.groupby("obsid")["beam"].transform("max") + 1
+    df["n_beams_formed"] = formed.astype(np.int32)
+    df["beam_frac"] = nb / formed.to_numpy()
+
     df["flag_multibeam"] = nb > max_beams
     return df
 
@@ -221,16 +236,17 @@ def cut_incoherent(df, n_ants, verbose=True):
     entering through the sidelobes does not. Tremblay et al. 2026 use exactly
     this test.
 
-    Every delivered file has incoherentPower identically zero, so this is a
-    no-op until real values are supplied via --incoherent-power. The cut is
-    wired up and ready for them.
+    The BLUSE team have confirmed incoherentPower was never measured for this
+    dataset, so this cut is inert here and will stay that way -- it is not
+    waiting on a delivery. It remains wired to --incoherent-power so the same
+    code works on any future dataset that does carry the incoherent beam.
     """
     ip = df["incoherentPower"].to_numpy(dtype=np.float64)
     have = np.isfinite(ip) & (ip > 0)
     if not have.any():
         if verbose:
-            print("      incoherentPower is zero/absent -- cut skipped "
-                  "(supply values with --incoherent-power)")
+            print("      incoherentPower absent -- cut skipped (never "
+                  "measured for this dataset; see AGENTS.md)")
         df["flag_incoherent"] = False
         df["coh_ratio"] = np.nan
         return df
@@ -429,7 +445,8 @@ def process(path, args, mask_table):
 
     surv = df[df.pass_all].sort_values("snr", ascending=False)
     keep = ["row", "obsid", "sourceName", "beam", "frequency", "driftRate",
-            "snr", "n_beams", "n_obs_at_freq", "ra", "dec"]
+            "snr", "n_beams", "n_beams_formed", "beam_frac", "n_obs_at_freq",
+            "ra", "dec"]
     surv_path = os.path.join(args.outdir, f"{name}_survivors.csv")
     surv[keep].to_csv(surv_path, index=False)
 

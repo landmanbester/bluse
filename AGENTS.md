@@ -91,19 +91,38 @@ tstart tstartts fileoffset telescopeId sourceName obsid filename data`
    normaliser or a CNN will poison the result. `explore.py:clean_stamp()`
    detects pad columns rather than trusting the stored width.
 
-2. **`incoherentPower` is identically zero in all seven files.** The strongest
-   classical discriminant, `SNR_coh ≤ √N·SNR_incoh`, is unavailable. Cut 5 of
-   `track_a_filter.py` is implemented and wired to `--incoherent-power FILE` but
-   inert. The user is trying to source the real values.
+2. **`incoherentPower` is identically zero, and always will be.** The BLUSE
+   team have confirmed it was **never measured** for this dataset — it is not
+   pending delivery. The strongest classical discriminant,
+   `SNR_coh ≤ √N·SNR_incoh`, is therefore permanently unavailable here, and
+   multi-beam coincidence has to carry that load alone. Cut 5 of
+   `track_a_filter.py` stays wired to `--incoherent-power FILE` so the same code
+   works on a future dataset that does carry the incoherent beam.
 
 3. **There is a detached SNR ~10⁷–10⁸ population**, separate from the main
    distribution (6 to ~10⁴). It sits at drift ≈ 0 and dies entirely under the
    multi-beam cut. Instrumental. Always work in log space; consider an upper
    clip. Never feed raw `snr` or `power` to a distance-based algorithm.
 
-4. **Hits-per-beam steps down at beams ~49 and ~55.** Unexplained instrumental
-   systematic. Any anomaly detector given `beam` as a feature will "discover" it.
-   Exclude `beam` or understand it first.
+4. **Hits-per-beam steps down at beams ~49 and ~55 — this is astronomy, not a
+   defect.** BLUSE assigns one coherent beam per catalogue target inside the
+   primary field of view and fills beams contiguously from 0, so a pointing with
+   only 49 targets populates beams 0–48 and leaves 49–63 empty. Verified on
+   `sband_short`: beam↔`sourceName` is 1:1 in 30/30 observations, indices are
+   contiguous from 0 in 28/30, and beams formed falls monotonically with
+   galactic latitude (64 beams at |b|≈11°, 20 at |b|≈65°) — sparse sky simply
+   has fewer targets. Run `python explore.py beams <file>` to see it.
+
+   The consequence is that **the multi-beam coincidence denominator varies per
+   observation**, so `n_beams` is not comparable across pointings. Catalogues
+   carry `n_beams_formed` and `beam_frac` for that reason. We checked whether
+   the cut should use a fraction instead of an absolute count: it moves 7 hits
+   out of 7,143, all in the pre-filtered `mk_sample_hits`, so the absolute
+   threshold stands.
+
+   `beam` is still a poor feature for an anomaly detector — beam index encodes
+   target rank, not anything physical — but it is not the landmine it looked
+   like.
 
 5. **`mk_sample_hits.h5` is pre-filtered** (0% zero-drift vs 22–47% elsewhere).
    Its survival rates are not comparable. Do not pool it with the others.
@@ -157,13 +176,25 @@ digital-TV comb (off by default; enabling it masks all of UHF), and `--tol-steps
 (the strict ±1 match leaks a known 870.2323 MHz emitter). All documented in
 `aug_2026_workshop/README.md`. Do not silently change these defaults.
 
-## Open questions for the BLUSE team
+## Questions to the BLUSE team — answered
 
-1. Can `incoherentPower` be populated?
-2. Why are the `_short` files ~118 s, below the 150 s viability cut in Czech et al.?
-3. What causes the hits-per-beam step at beams ~49 and ~55?
-4. Has `mk_sample_hits.h5` been pre-filtered?
-5. Are per-antenna stamp data available? That would allow true coherence testing.
+1. **Can `incoherentPower` be populated?** No — it was never measured for this
+   data. Treat the coherent/incoherent test as permanently unavailable.
+2. **Why are the `_short` files ~118 s?** Still open. The 150 s figure is ours,
+   read off Czech et al. 2026 §6: of ~1.5M coherent beams "approximately 1.2
+   million were viable for technosignature searching (the remainder were too
+   short in duration, less than 150s)". That sentence describes how the *survey*
+   was triaged; it is not necessarily a rule about what may be analysed. The
+   `_short` files are a deliberate short-integration subset, and the honest
+   reading is that they sit below the survey's own viability line and should be
+   analysed and reported separately from the `_long` files, not that they are
+   unusable. Worth confirming the intent.
+3. **What causes the hits-per-beam step?** Answered by us, not the team — see
+   gotcha 4. Sparse sky, fewer targets, fewer beams formed. Benign.
+4. **Has `mk_sample_hits.h5` been pre-filtered?** Yes. Keep it out of pooled
+   statistics.
+5. **Are per-antenna stamp data available?** Out of scope for this workshop —
+   the stamp files are too large.
 
 ## Licensing
 

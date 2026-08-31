@@ -34,7 +34,7 @@ data                       # (n, 1, numTimesteps, 120) float32
 
 ### Five findings that should shape the whole workshop
 
-**1. `incoherentPower` is identically zero in every file.** The single most diagnostic classical test — `SNR_coherent ≤ √N_ant · SNR_incoherent` (Tremblay et al. 2026) — is **not available**. We must lean on multi-beam coincidence instead. *Worth asking the BLUSE team whether the incoherent beam can be supplied.*
+**1. `incoherentPower` is identically zero in every file.** The single most diagnostic classical test — `SNR_coherent ≤ √N_ant · SNR_incoherent` (Tremblay et al. 2026) — is **not available**. *(Confirmed by the BLUSE team: it was never measured for this data, so this is permanent, not a delivery we are waiting on.)* Multi-beam coincidence has to carry that load alone.
 
 **2. Multi-beam coincidence alone kills ~96% of the data.** Measured on `sband_short` (1 Hz tolerance, per observation):
 
@@ -52,7 +52,7 @@ A real sky signal appears in one or a few coherent beams; local RFI lights up th
 
 **4. There is a detached ultra-high-SNR population at SNR ~10⁷–10⁸,** completely separated from the main distribution (which runs 6 to ~10⁴). It sits at drift ≈ 0 and vanishes entirely under the coincidence cut — the max surviving SNR drops from 9.9×10⁷ to 2059. This matches Tremblay et al.'s finding that >90% of very-high-SNR detections are instrumental artefacts, and their consequent 100σ *upper* cut. **Do not feed raw SNR to any distance-based algorithm without a log transform and probably an upper clip.**
 
-**5. Hits-per-beam is flat for beams 0–48, then steps down at ~49 and again at ~55.** This is an instrumental systematic, not sky. Any anomaly detector given `beam` as a feature will happily "discover" it. Either understand it first or exclude it.
+**5. Hits-per-beam is flat for beams 0–48, then steps down at ~49 and again at ~55.** *(Resolved after this document was first written.)* Not an instrumental systematic — BLUSE forms one coherent beam per catalogue target in the primary field of view, filling beams contiguously from 0, so a sparse field forms fewer than 64. Beam↔`sourceName` is 1:1 in 30/30 `sband_short` observations and beams formed falls monotonically with galactic latitude. The real consequence is that **the multi-beam coincidence denominator varies per observation**; `n_beams_formed` and `beam_frac` are recorded for that reason. `python explore.py beams <file>` visualises it.
 
 ### Practical gotchas
 
@@ -186,11 +186,19 @@ Train on free labels from the spatial filter (high multiplicity = RFI, §2.5), t
 
 ## 5. Questions for the BLUSE team
 
-1. Can `incoherentPower` be populated? It is zero everywhere and it is the strongest single discriminant.
+1. Can `incoherentPower` be populated? It is zero everywhere and it is the strongest single discriminant. (Answer - the incoherentPower was not measured for this data.)
 2. Why are the `_short` files ~118 s, below the stated 150 s viability threshold?
-3. What causes the hits-per-beam step at beams ~49 and ~55?
-4. Has `mk_sample_hits.h5` been pre-filtered? It has 0% zero-drift hits while the others have 22–47%.
-5. Are per-antenna stamp data available? That would unlock true coherence testing rather than beam-multiplicity proxying.
+   (The 150 s is ours, from Czech et al. 2026 §6: of ~1.5M coherent beams
+   "approximately 1.2 million were viable for technosignature searching (the
+   remainder were too short in duration, less than 150s)". That describes survey
+   triage, not a hard rule — but it does mean the `_short` files should be
+   reported separately from the `_long` ones.)
+3. What causes the hits-per-beam step at beams ~49 and ~55? (Answered by us:
+   one coherent beam per catalogue target, filled contiguously from 0, so sparse
+   sky forms fewer beams — 64 at |b|≈11°, 20 at |b|≈65°. Benign. See
+   `explore.py beams`.)
+4. Has `mk_sample_hits.h5` been pre-filtered? It has 0% zero-drift hits while the others have 22–47%. (Answer - yes, this one has been pre-filtered.)
+5. Are per-antenna stamp data available? That would unlock true coherence testing rather than beam-multiplicity proxying. (Answer - The stamp files are huge, not in scope for this workshop.)
 
 ---
 

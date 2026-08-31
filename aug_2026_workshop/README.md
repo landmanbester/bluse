@@ -105,13 +105,18 @@ elsewhere. Its 5.99% survival rate is not comparable to the others.
 
 ## Still open
 
-- **`incoherentPower` is identically zero in all seven files.** Cut 5 is
-  implemented and tested but inert. It is the strongest single discriminant we
-  are missing.
-- **Hits-per-beam steps down at beams ~49 and ~55** — instrumental, unexplained.
-  Don't feed `beam` to an anomaly detector until this is understood.
-- **The `_short` files are ~118 s**, below the 150 s viability cut quoted in
-  Czech et al. 2026.
+- **`incoherentPower` was never measured for this data** (confirmed by the BLUSE
+  team). Cut 5 is implemented and tested but permanently inert here. The
+  strongest classical discriminant is simply not available, which puts the whole
+  weight on multi-beam coincidence.
+- **The `_short` files are ~118 s.** Czech et al. 2026 §6 describes beams shorter
+  than 150 s as not "viable for technosignature searching" when triaging the
+  survey. Ours are a deliberate short-integration subset; report them separately
+  from the `_long` files rather than pooling.
+- **Hits-per-beam steps at beams ~49/~55 — explained, benign.** One beam per
+  target, filled from 0, and sparse sky has fewer targets. `python explore.py
+  beams <file>` shows it. Catalogues now carry `n_beams_formed` and `beam_frac`
+  because the coincidence denominator varies per observation.
 
 ## Next
 
