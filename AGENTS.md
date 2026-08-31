@@ -36,7 +36,7 @@ aug_2026_workshop/
   features.py                    Track B: extensible feature registry
   track_b_features.py            Track B: feature extraction driver
   track_b_cluster.py             Track B: HDBSCAN clustering
-  data/                          7 HDF5 files, 21 GB (untracked)
+  data/                          7 HDF5 files + filtered_hits.csv (untracked)
   catalogues/                    Track A output (.csv tracked, .parquet not)
   features/                      Track B feature matrices (untracked, ~350 MB)
   clusters/                      Track B clustering output
@@ -84,9 +84,20 @@ feature vector and an image.
 | `sband_short` | 38,576 | (n,1,24,120) | 117.8 s | 1.63 Hz | 1968.8–2825.0 MHz |
 | `mk_sample_hits` | 15,119 | (n,1,57,120) | 286.0 s | 1.59 Hz | 856.0–1702.8 MHz |
 
+**`numTimesteps` is per-row, not per-file**, and it varies within two of them:
+`lband_long` holds both 56 and 57, `uhf_short` both 14 and 15. The Duration
+column above is `numTimesteps[0] × tsamp` and is therefore indicative, not
+exact. The cube's third axis is the file's *maximum*, so a shorter hit is
+padded — never assume every row fills it. Feature code should read the array
+shape (as `prepare_batch` does), not the column.
+
 Columns: `id index beam coarseChannel startChannel numChannels numTimesteps
 frequency driftRate driftSteps snr power incoherentPower ra dec fch1 foff tsamp
 tstart tstartts fileoffset telescopeId sourceName obsid filename data`
+
+**`id` is the canonical hit key** — a global identifier assigned upstream, unique
+across the whole delivery and stable between the HDF5 files and
+`filtered_hits.csv`. Prefer it to `(file, row)` for joins.
 
 ## Gotchas — read before writing analysis code
 
@@ -129,8 +140,20 @@ tstart tstartts fileoffset telescopeId sourceName obsid filename data`
    target rank, not anything physical — but it is not the landmine it looked
    like.
 
-5. **`mk_sample_hits.h5` is pre-filtered** (0% zero-drift vs 22–47% elsewhere).
-   Its survival rates are not comparable. Do not pool it with the others.
+5. **`mk_sample_hits.h5` is pre-filtered AND 53.7% duplicated.** It has 0%
+   zero-drift where the others have 22–47% (confirmed by the BLUSE team), and
+   **8,116 of its 15,119 rows are byte-identical duplicates of rows in
+   `lband_long.h5`** — same `id`, frequency, snr, drift and obsid. It is a
+   curated sample carved out of `lband_long`, not an independent file. Our seven
+   files hold 2,022,171 rows but only **2,014,055 unique `id`s**.
+
+   `track_b_features.py` deduplicates the combined `all_features.parquet` on
+   `id`, keeping the copy from the larger file; per-file outputs are left alone.
+   Anything else that pools files must do the same or it silently
+   double-weights those hits. It is not a leakage risk — every duplicate pair
+   shares an `obsid`, so `group_id` splitting keeps both copies together — but
+   the weighting is wrong regardless. Its survival and label rates are not
+   comparable to the other files either way.
 
 6. **Time and frequency are not interchangeable axes.** Any self-supervised or
    augmentation-based method (BYOL, SimCLR, contrastive) must drop
@@ -219,6 +242,21 @@ and D (self-supervised, GPU, stretch). See `brainstorming.md`.
 digital-TV comb (off by default; enabling it masks all of UHF), and `--tol-steps`
 (the strict ±1 match leaks a known 870.2323 MHz emitter). All documented in
 `aug_2026_workshop/README.md`. Do not silently change these defaults.
+
+## `data/filtered_hits.csv`
+
+892 MB, 2,014,055 rows, 25 columns — the same schema as the HDF5 metadata minus
+the `data` cube. It is **exactly the deduplicated union of the metadata already
+in our seven HDF5 files**: `id` sets match with zero on either side only, and a
+full join over 14 columns shows no value differing anywhere. It contains no new
+hits, no new columns, no stamps, and `incoherentPower` is all zero in it too.
+
+Its value is threefold: it validated our HDF5 reader against an independent
+export, it exposed the `mk_sample_hits` duplication in gotcha 5, and its `id`
+range (1–35,904,223) suggests this workshop set is roughly a 5.6% draw from a
+~36M-hit parent population — worth remembering when judging how representative
+anything we find is. Despite the name it is not a further filter on top of our
+data; "filtered" appears to describe how the subset was drawn from that parent.
 
 ## Questions to the BLUSE team — answered
 

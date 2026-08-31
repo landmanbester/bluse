@@ -100,8 +100,12 @@ survivors are all 870.2323 MHz with drifts of −0.277, −0.318, −0.338 Hz/s 
 plainly one transmitter, split into "distinct" signals by the tolerance.
 `--tol-steps 999` matches on frequency alone: survivors 1,015 → 832.
 
-**4. `mk_sample_hits.h5` is pre-filtered** — 0% zero-drift, versus 22–47%
-elsewhere. Its 5.99% survival rate is not comparable to the others.
+**4. `mk_sample_hits.h5` is pre-filtered and half-duplicated** — 0% zero-drift
+versus 22–47% elsewhere (confirmed by the BLUSE team), and 8,116 of its 15,119
+rows are byte-identical duplicates of rows in `lband_long.h5`. It is a curated
+sample carved out of that file, not an independent one. Its 5.99% survival rate
+is not comparable to the others. Track B deduplicates the combined feature table
+on `id`; anything else that pools files must do the same.
 
 ## Still open
 

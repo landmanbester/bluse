@@ -17,9 +17,14 @@ input file that Track E can train on directly.
 
 OUTPUT -- designed for Track E
 ------------------------------
-`features/<name>_features.parquet`, one row per hit, columns in four groups:
+`features/<name>_features.parquet` per input file, plus the combined
+`features/all_features.parquet` -- which is **deduplicated on `id`**, because
+8,116 hits appear in both mk_sample_hits.h5 and lband_long.h5 and would
+otherwise be double-weighted. Per-file outputs are never deduplicated.
 
-  provenance    file row obsid sourceName beam frequency driftRate snr
+One row per hit, columns in four groups:
+
+  provenance    file id row obsid sourceName beam frequency driftRate snr
                 power ra dec tstart numChannels n_beams n_beams_formed
                 beam_frac n_obs_at_freq  + every Track A flag_* and pass_all
   features      f01..f13, x01..x03 (raw) and <col>_n (normalised)
@@ -70,7 +75,7 @@ DATA_DIR = os.path.join(HERE, "data")
 CAT_DIR = os.path.join(HERE, "catalogues")
 
 PROVENANCE = [
-    "row", "obsid", "sourceName", "beam", "frequency", "driftRate", "snr",
+    "id", "row", "obsid", "sourceName", "beam", "frequency", "driftRate", "snr",
     "power", "ra", "dec", "tstart", "numChannels", "coarseChannel",
     "n_beams", "n_beams_formed", "beam_frac", "n_obs_at_freq",
 ]
@@ -297,9 +302,57 @@ def _read_one_by_one(data, idx):
     return np.stack(got), np.array(keep)
 
 
-def summarise(frames, outdir):
+def deduplicate(all_df):
+    """
+    Drop hits that appear in more than one input file.
+
+    `id` is a global hit identifier assigned upstream, so the same hit can sit
+    in two of our files. It does: 8,116 of mk_sample_hits.h5's 15,119 rows
+    (53.7%) are byte-identical duplicates of rows in lband_long.h5 -- same id,
+    frequency, snr, drift and obsid. This was invisible until the BLUSE team
+    supplied filtered_hits.csv, whose 2,014,055 rows match our 2,022,171 rows
+    on exactly 2,014,055 unique ids.
+
+    Left alone this silently double-weights those hits in clustering and in any
+    Track E training set. It is not a leakage risk -- every duplicate pair
+    shares an obsid, so group_id splitting keeps both copies on the same side --
+    but the weighting is wrong either way.
+
+    For each duplicated id we keep the copy from the file with the most rows.
+    A curated or pre-filtered sample is by construction smaller than the file it
+    was drawn from, so the larger file is the parent; and mk_sample_hits, the
+    offender here, is pre-filtered (0% zero-drift where the others have 22-47%)
+    and so is the copy we least want to keep.
+    """
+    if "id" not in all_df.columns:
+        print("  no `id` column -- cannot deduplicate")
+        return all_df
+
+    n0 = len(all_df)
+    order = all_df["file"].value_counts()
+    rank = all_df["file"].map({f: i for i, f in enumerate(order.index)})
+    out = (all_df.assign(_rank=rank)
+                 .sort_values(["id", "_rank"], kind="mergesort")
+                 .drop_duplicates("id", keep="first")
+                 .drop(columns="_rank")
+                 .sort_index())
+    dropped = n0 - len(out)
+    if dropped:
+        lost = all_df.loc[~all_df.index.isin(out.index), "file"].value_counts()
+        print(f"\n  deduplicated on `id`: dropped {dropped:,} of {n0:,} rows "
+              f"({100 * dropped / n0:.2f}%)")
+        for f, c in lost.items():
+            print(f"      {c:>8,} from {f}")
+    else:
+        print("\n  deduplicated on `id`: no duplicates found")
+    return out.reset_index(drop=True)
+
+
+def summarise(frames, outdir, dedupe=True):
     """Print feature health, then write the combined table Track E will read."""
     all_df = pd.concat(frames, ignore_index=True)
+    if dedupe:
+        all_df = deduplicate(all_df)
     cols = F.all_columns()
     print(f"\n{'=' * 80}\nCOMBINED  {len(all_df):,} hits from {len(frames)} files\n")
     print(f"  {'feature':<26} {'finite%':>8} {'median':>12} {'p1':>12} {'p99':>12}")
@@ -350,6 +403,13 @@ def main():
                         "Starves the class and makes Track E partly circular; "
                         "off by default")
     p.add_argument("--no-progress", dest="progress", action="store_false")
+    p.add_argument("--no-dedupe", action="store_true",
+                   help="keep hits that appear in more than one input file. "
+                        "By default the combined table is deduplicated on `id`; "
+                        "per-file outputs are always left as they are")
+    p.add_argument("--combine-only", action="store_true",
+                   help="rebuild all_features.parquet from the per-file "
+                        "parquets already in --outdir, without re-extracting")
     p.add_argument("--list", action="store_true", help="print the registry and exit")
     args = p.parse_args()
 
@@ -357,9 +417,17 @@ def main():
         F.describe()
         return
 
-    frames = [extract(f, args) for f in resolve_files(args.files)]
+    if args.combine_only:
+        parts = sorted(glob(os.path.join(args.outdir, "*_features.parquet")))
+        parts = [p for p in parts if not p.endswith("all_features.parquet")]
+        if not parts:
+            sys.exit(f"No per-file parquets in {args.outdir}")
+        print(f"combining {len(parts)} existing per-file parquets")
+        frames = [pd.read_parquet(p) for p in parts]
+    else:
+        frames = [extract(f, args) for f in resolve_files(args.files)]
     if frames:
-        summarise(frames, args.outdir)
+        summarise(frames, args.outdir, dedupe=not args.no_dedupe)
 
 
 if __name__ == "__main__":
