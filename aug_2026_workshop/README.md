@@ -122,6 +122,38 @@ on `id`; anything else that pools files must do the same.
   beams <file>` shows it. Catalogues now carry `n_beams_formed` and `beam_frac`
   because the coincidence denominator varies per observation.
 
+## Cluster Bench — interactive hyperparameter explorer
+
+```bash
+python explorer/app.py            # then open http://127.0.0.1:8000
+python explorer/app.py --port 8080 --host 0.0.0.0   # share on the LAN
+```
+
+FastAPI + htmx + a canvas scatter. Pick a file, toggle features, adjust
+HDBSCAN, press **Cluster**. A re-cluster on a 35k sample takes ~1.2 s.
+
+**The feature rail is the point.** Each feature shows its interquartile range
+as a bar, because the Euclidean metric HDBSCAN uses is a sum of those spreads —
+so the widest bar is the feature doing most of the clustering. On
+`sband_short`, `f02_abs_drift` measures 5.954 against `f03_snr` at 0.092. That
+is why the defaults produced two clusters holding 90% of the data, and it is
+not something you can see in a static run. Toggle a feature and watch the bars
+renormalise.
+
+Also exposed, in rough order of how much they matter: **scaling** (robust /
+quantile / GLOBULAR-literal), **mode** (epochs / single), then
+`min_cluster_size`, `min_samples`, `epsilon`, `batch`, `epochs`.
+
+How it works: the embedding is computed once per dataset and never recomputed,
+so changing hyperparameters ships an Int32Array of labels and recolours in
+place — points crossfade over 260 ms so you can see which ones changed cluster.
+Every run is cached by parameter hash, so the run history is free and revisiting
+a configuration is instant. Click a point for its waterfall; click a table row
+to zoom to that cluster.
+
+UMAP gives better visual separation than PCA but takes ~60 s on 35k and blocks
+the request while it runs. It is cached per dataset, so you pay once.
+
 ## Next
 
 Track A output feeds everything else. `<name>_cat.parquet` carries all original

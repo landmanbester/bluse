@@ -36,6 +36,7 @@ aug_2026_workshop/
   features.py                    Track B: extensible feature registry
   track_b_features.py            Track B: feature extraction driver
   track_b_cluster.py             Track B: HDBSCAN clustering
+  explorer/                      Cluster Bench: FastAPI + htmx tuning UI
   data/                          7 HDF5 files + filtered_hits.csv (untracked)
   catalogues/                    Track A output (.csv tracked, .parquet not)
   features/                      Track B feature matrices (untracked, ~350 MB)

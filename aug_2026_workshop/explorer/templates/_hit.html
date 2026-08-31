@@ -1,0 +1,10 @@
+<img src="/stamp.png?file={{ r.file }}&row={{ r.row }}" alt="waterfall for hit {{ r.id }}">
+<dl>
+  <dt>cluster</dt><dd>{% if label is not none %}{{ label if label >= 0 else 'noise' }}{% else %}—{% endif %}</dd>
+  <dt>freq</dt><dd>{{ '%.6f'|format(r.frequency) }} MHz</dd>
+  <dt>drift</dt><dd>{{ '%+.4f'|format(r.driftRate) }} Hz/s</dd>
+  <dt>SNR</dt><dd>{{ '%.4g'|format(r.snr) }}</dd>
+  <dt>beams</dt><dd>{{ r.n_beams }}</dd>
+  <dt>beam</dt><dd>{{ r.beam }}</dd>
+  <dt>source</dt><dd style="font-size:9.5px">{{ r.sourceName }}</dd>
+</dl>

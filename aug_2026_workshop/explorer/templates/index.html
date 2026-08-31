@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cluster Bench — BLUSE</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+
+<header>
+  <h1>Cluster<span class="dot">.</span>Bench</h1>
+  <span class="tag">BLUSE Track B — HDBSCAN over hand-crafted features</span>
+  <span class="spacer"></span>
+  <span id="spin">working</span>
+</header>
+
+<main>
+  <aside id="rail">
+    {% if not has_features %}
+      <p class="error">No feature files yet. Run
+        <code>python track_b_features.py</code> to build them.</p>
+    {% else %}
+    <form hx-post="/dataset" hx-target="#controls" hx-swap="innerHTML">
+      <div class="eyebrow">Dataset</div>
+      <label class="field">
+        <span>file</span>
+        <select name="file">
+          {% for f in files %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
+        </select>
+      </label>
+      <div class="row2">
+        <label class="field"><span>sample</span>
+          <input type="number" name="sample" value="35000" min="1000" step="1000"></label>
+        <label class="field"><span>seed</span>
+          <input type="number" name="seed" value="0"></label>
+      </div>
+      <button type="submit">Load</button>
+    </form>
+
+    <div id="controls"></div>
+    {% endif %}
+  </aside>
+
+  <section id="stage">
+    <div id="plot-wrap">
+      <canvas id="plot"></canvas>
+      <div id="hud"></div>
+      <div id="tip"></div>
+      <div id="zoomhint">scroll to zoom · drag to pan · click a point</div>
+      <div id="empty">
+        <div class="big">no clustering yet</div>
+        <div>Load a file, then press Cluster.<br>
+             Watch the feature bars — the widest one dominates the metric.</div>
+      </div>
+    </div>
+    <div id="results"></div>
+  </section>
+</main>
+
+<script src="/static/scatter.js"></script>
+</body>
+</html>

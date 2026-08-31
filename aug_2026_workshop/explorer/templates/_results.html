@@ -1,0 +1,56 @@
+<div class="stats">
+  <div class="stat hi"><div class="k">clusters</div>
+    <div class="v">{{ run.stats.n_clusters }}</div></div>
+  <div class="stat"><div class="k">clustered</div>
+    <div class="v">{{ '%.1f'|format(run.stats.clustered_pct) }}<span class="sub">%</span></div></div>
+  <div class="stat"><div class="k">noise</div>
+    <div class="v">{{ '{:,}'.format(run.stats.noise) }}</div></div>
+  <div class="stat"><div class="k">noise ≤4 beams</div>
+    <div class="v">{{ '{:,}'.format(run.stats.confined) }}</div></div>
+  <div class="stat"><div class="k">features</div>
+    <div class="v">{{ run.stats.n_features }}</div></div>
+  <div class="stat"><div class="k">time</div>
+    <div class="v">{{ '%.2f'|format(run.stats.seconds) }}<span class="sub">s{% if cached %} cached{% endif %}</span></div></div>
+</div>
+
+{% if summary %}
+<table>
+  <thead><tr>
+    <th>cluster</th><th>n</th><th>RFI</th><th>freq MHz</th>
+    <th>span</th><th>SNR</th><th>beams</th><th>obs</th>
+  </tr></thead>
+  <tbody>
+  {% for r in summary %}
+    <tr onclick="focusCluster({{ r.cluster }})" style="cursor:pointer">
+      <td><span class="swatch" style="background:{{ colour(r.cluster) }}"></span>{{ r.cluster }}</td>
+      <td>{{ '{:,}'.format(r.n) }}</td>
+      <td class="pct">{{ r.rfi_pct|round|int }}%</td>
+      <td>{{ '%.4f'|format(r.freq) }}</td>
+      <td class="pct">{{ '%.3f'|format(r.span) }}</td>
+      <td>{{ '%.3g'|format(r.snr) }}</td>
+      <td>{{ r.beams|round|int }}</td>
+      <td class="pct">{{ r.obs }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="error">Nothing clustered. Every point is noise — try a smaller
+  min_cluster_size, a larger epsilon, or turn more features on.</p>
+{% endif %}
+
+<template id="history-fragment">
+{% for h in history %}
+  <div class="run {% if h.run_id == run.run_id %}current{% endif %}">
+    <span class="n">{{ h.stats.n_clusters }}</span>
+    <span class="meta">{{ h.params.scaling }} · {{ h.params.mode }} ·
+      mcs {{ h.params.mcs }} · eps {{ h.params.eps }} ·
+      {{ h.stats.n_features }}f</span>
+    <span class="meta">{{ '%.1f'|format(h.stats.clustered_pct) }}%</span>
+  </div>
+{% endfor %}
+</template>
+<script>
+  document.getElementById('history').innerHTML =
+    document.getElementById('history-fragment').innerHTML;
+</script>
