@@ -165,6 +165,19 @@ digital-TV comb (off by default; enabling it masks all of UHF), and `--tol-steps
 4. Has `mk_sample_hits.h5` been pre-filtered?
 5. Are per-antenna stamp data available? That would allow true coherence testing.
 
+## Licensing
+
+The **code** in this repository is MIT licensed (`LICENSE`), copyright Landman
+Bester.
+
+That licence covers our code and documentation only. It does **not** cover the
+BLUSE observational data, nor the derived catalogues in
+`aug_2026_workshop/catalogues/`, which contain sky coordinates, Gaia and exotica
+source identifiers, and observation IDs belonging to SARAO / Breakthrough Listen.
+Czech et al. 2026 states those survey results are destined for forthcoming
+publications. The repository is **private** for that reason. Clear it with the
+BLUSE team before redistributing any of it or making the repository public.
+
 ## Key references
 
 - Czech et al. 2026, BLUSE, arXiv:2607.23651 — the instrument
