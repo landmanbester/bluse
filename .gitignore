@@ -1,0 +1,29 @@
+# ---- data ------------------------------------------------------------------
+# 21 GB of HDF5 supplied by the BLUSE team. Never commit.
+aug_2026_workshop/data/
+
+# ---- environments ----------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# ---- generated outputs -----------------------------------------------------
+# Parquet catalogues: ~105 MB, deterministic, regenerated in ~20 s by
+#   python track_a_filter.py
+# The .csv cut-flows and survivor lists ARE tracked -- they are the record of
+# results and total ~1 MB.
+aug_2026_workshop/catalogues/*.parquet
+
+# Plots are regenerated on demand by explore.py.
+aug_2026_workshop/plots/
+
+# ---- reference PDFs --------------------------------------------------------
+# ~30 MB of published papers, all retrievable by the arXiv IDs recorded in
+# papers/*.md. Delete this line if you want the repo self-contained.
+papers/*.pdf
+
+# ---- misc ------------------------------------------------------------------
+.DS_Store
+*.swp

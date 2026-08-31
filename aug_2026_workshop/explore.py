@@ -1,0 +1,478 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["h5py", "numpy", "matplotlib"]
+# ///
+"""
+explore.py -- visual exploration of the BLUSE workshop HDF5 stamp files.
+
+The data are seticore "stamp" files flattened into a columnar HDF5 layout: one
+row per narrowband hit, with N scalar metadata columns plus a `data` cube of
+per-hit time-frequency cutouts (the waterfall around the detection).
+
+Run with uv (no environment setup needed):
+
+    uv run explore.py info
+    uv run explore.py meta   data/sband_short.h5
+    uv run explore.py stamps data/sband_short.h5 --sort snr --n 24
+    uv run explore.py obs    data/sband_short.h5
+    uv run explore.py coincidence data/sband_short.h5
+
+...or with an interpreter that already has h5py/numpy/matplotlib:
+
+    .venv/bin/python explore.py info
+
+Every plotting command writes a PNG into ./plots/ and prints the path.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from glob import glob
+
+import h5py
+import numpy as np
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(HERE, "data")
+PLOT_DIR = os.path.join(HERE, "plots")
+
+# Columns that are one scalar per hit. `data` and `tstartts` are handled apart:
+# `data` is the stamp cube, `tstartts` is a nested compound type.
+SCALAR_COLS = [
+    "id", "index", "beam", "coarseChannel", "startChannel", "numChannels",
+    "numTimesteps", "frequency", "driftRate", "driftSteps", "snr", "power",
+    "incoherentPower", "ra", "dec", "fch1", "foff", "tsamp", "tstart",
+    "fileoffset", "telescopeId",
+]
+STRING_COLS = ["sourceName", "obsid", "filename"]
+
+PAD_VALUE = -1.0  # stamps are right-aligned in a 120-channel buffer; the unused
+                  # leading columns are filled with exactly -1.
+
+
+# ----------------------------------------------------------------------------
+# helpers
+# ----------------------------------------------------------------------------
+
+def resolve_files(paths):
+    """Expand user-given paths, or default to every .h5 in ./data."""
+    if not paths:
+        found = sorted(glob(os.path.join(DATA_DIR, "*.h5")))
+        if not found:
+            sys.exit(f"No .h5 files found in {DATA_DIR}. Pass paths explicitly.")
+        return found
+    out = []
+    for p in paths:
+        if os.path.isdir(p):
+            out.extend(sorted(glob(os.path.join(p, "*.h5"))))
+        elif os.path.exists(p):
+            out.append(p)
+        elif os.path.exists(os.path.join(DATA_DIR, p)):
+            out.append(os.path.join(DATA_DIR, p))
+        else:
+            sys.exit(f"Not found: {p}")
+    return out
+
+
+def decode(arr):
+    """h5py object-dtype string column -> numpy array of str."""
+    return np.array([x.decode() if isinstance(x, bytes) else str(x) for x in arr])
+
+
+def load_meta(h, cols=None):
+    """Read the scalar metadata columns into a dict of arrays. Cheap: no stamps."""
+    cols = cols or SCALAR_COLS
+    return {c: h[c][:] for c in cols if c in h}
+
+
+def clean_stamp(cube_row):
+    """
+    Strip the -1 padding from one stamp and return (image, n_valid_channels).
+
+    `data` rows are (1, n_time, 120); only `numChannels` of those 120 columns
+    hold real data. Rather than trusting a stored width, detect the pad columns
+    directly -- that stays correct whichever end they sit at.
+    """
+    img = np.asarray(cube_row)
+    while img.ndim > 2:
+        img = img[0]
+    valid = ~np.all(img == PAD_VALUE, axis=0)
+    if valid.any():
+        img = img[:, valid]
+    return img, int(valid.sum())
+
+
+def norm_stamp(img):
+    """Per-stamp normalisation for display: divide by the median, guard zeros."""
+    med = np.median(img)
+    if not np.isfinite(med) or med <= 0:
+        med = np.abs(img).max() or 1.0
+    out = img / med
+    return np.clip(out, 1e-3, None)
+
+
+def ensure_plot_dir():
+    os.makedirs(PLOT_DIR, exist_ok=True)
+    return PLOT_DIR
+
+
+def savefig(fig, name):
+    ensure_plot_dir()
+    path = os.path.join(PLOT_DIR, name)
+    fig.savefig(path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {path}")
+    return path
+
+
+# ----------------------------------------------------------------------------
+# cmd: info
+# ----------------------------------------------------------------------------
+
+def cmd_info(args):
+    files = resolve_files(args.files)
+    print(f"{len(files)} file(s)\n")
+    total = 0
+    for f in files:
+        name = os.path.basename(f)
+        size = os.path.getsize(f) / 1e9
+        try:
+            with h5py.File(f, "r") as h:
+                n = h["snr"].shape[0]
+                total += n
+                d = h["data"]
+                snr = h["snr"][:]
+                dr = h["driftRate"][:]
+                fr = h["frequency"][:]
+                ip = h["incoherentPower"][:]
+                T = int(h["numTimesteps"][0])
+                tsamp = float(h["tsamp"][0])
+                foff_hz = float(h["foff"][0]) * 1e6
+                obs = np.unique(decode(h["obsid"][:]))
+                nsrc = len(np.unique(decode(h["sourceName"][:])))
+                nbeam = len(np.unique(h["beam"][:]))
+
+                print(f"{name}   ({size:.2f} GB)")
+                print(f"   hits        {n:,}")
+                print(f"   stamp cube  {d.shape}  dtype={d.dtype} "
+                      f"chunks={d.chunks} compression={d.compression}")
+                print(f"   time        {T} steps x {tsamp:.3f} s = {T * tsamp:.1f} s")
+                print(f"   freq res    {foff_hz:.2f} Hz   band "
+                      f"{fr.min():.1f}-{fr.max():.1f} MHz")
+                print(f"   snr         {snr.min():.1f} .. {snr.max():.3g}  "
+                      f"(median {np.median(snr):.1f})")
+                print(f"   drift       +/-{np.abs(dr).max():.3f} Hz/s   "
+                      f"exactly zero: {100 * np.mean(dr == 0):.1f}% of hits")
+                print(f"   coverage    {len(obs)} observations, {nsrc} sources, "
+                      f"{nbeam} beams")
+                if np.all(ip == 0):
+                    print(f"   NOTE        incoherentPower is identically zero "
+                          f"-- the coherent/incoherent test is unavailable")
+                print()
+        except Exception as e:
+            print(f"{name}: ERROR {type(e).__name__}: {e}\n")
+    print(f"total hits across files: {total:,}")
+
+
+# ----------------------------------------------------------------------------
+# cmd: meta
+# ----------------------------------------------------------------------------
+
+def cmd_meta(args):
+    f = resolve_files([args.file])[0]
+    name = os.path.basename(f).replace(".h5", "")
+    with h5py.File(f, "r") as h:
+        m = load_meta(h)
+        n = len(m["snr"])
+
+    fig, ax = plt.subplots(2, 3, figsize=(16, 8))
+    fig.suptitle(f"{name}  --  {n:,} hits", fontsize=13)
+
+    # SNR: log-log, because the range spans ~7 decades above a hard cut at 6.
+    a = ax[0, 0]
+    a.hist(np.log10(m["snr"]), bins=120, color="#3b6ea5")
+    a.set_xlabel("log10(SNR)"); a.set_ylabel("hits"); a.set_yscale("log")
+    a.set_title(f"SNR  (threshold = {m['snr'].min():.1f})")
+
+    # Frequency occupancy -- where the RFI lives.
+    a = ax[0, 1]
+    a.hist(m["frequency"], bins=400, color="#a5533b")
+    a.set_xlabel("frequency [MHz]"); a.set_ylabel("hits"); a.set_yscale("log")
+    a.set_title("frequency occupancy")
+
+    # Drift rate. The spike at exactly zero is the classic local-RFI signature.
+    a = ax[0, 2]
+    dr = m["driftRate"]
+    a.hist(dr, bins=121, color="#4a7c59")
+    a.set_xlabel("drift rate [Hz/s]"); a.set_ylabel("hits"); a.set_yscale("log")
+    a.set_title(f"drift rate  ({100 * np.mean(dr == 0):.1f}% exactly 0)")
+
+    # Hits per beam: a flat distribution means field-wide RFI, spikes mean
+    # something beam-specific.
+    a = ax[1, 0]
+    beams, counts = np.unique(m["beam"], return_counts=True)
+    a.bar(beams, counts, color="#7a5c9e", width=1.0)
+    a.set_xlabel("beam"); a.set_ylabel("hits"); a.set_title("hits per beam")
+
+    # Hits per coarse channel.
+    a = ax[1, 1]
+    cc, ccn = np.unique(m["coarseChannel"], return_counts=True)
+    a.bar(cc, ccn, color="#9e7a5c", width=1.0)
+    a.set_xlabel("coarse channel"); a.set_ylabel("hits")
+    a.set_title("hits per coarse channel")
+
+    # SNR vs drift: RFI tends to pile up in the zero-drift column.
+    a = ax[1, 2]
+    a.scatter(dr, m["snr"], s=1, alpha=0.15, color="#333333", rasterized=True)
+    a.set_yscale("log"); a.set_xlabel("drift rate [Hz/s]"); a.set_ylabel("SNR")
+    a.set_title("SNR vs drift rate")
+
+    fig.tight_layout()
+    savefig(fig, f"{name}_meta.png")
+
+
+# ----------------------------------------------------------------------------
+# cmd: stamps
+# ----------------------------------------------------------------------------
+
+def cmd_stamps(args):
+    f = resolve_files([args.file])[0]
+    name = os.path.basename(f).replace(".h5", "")
+    n_show = args.n
+
+    with h5py.File(f, "r") as h:
+        snr = h["snr"][:]
+        dr = h["driftRate"][:]
+        n = len(snr)
+
+        if args.sort == "snr":
+            order = np.argsort(snr)[::-1][:n_show]
+            label = "highest SNR"
+        elif args.sort == "drift":
+            order = np.argsort(np.abs(dr))[::-1][:n_show]
+            label = "largest |drift rate|"
+        elif args.sort == "nonzero-drift":
+            cand = np.where(dr != 0)[0]
+            order = cand[np.argsort(snr[cand])[::-1][:n_show]]
+            label = "highest SNR with non-zero drift"
+        else:
+            rng = np.random.default_rng(args.seed)
+            order = rng.choice(n, size=min(n_show, n), replace=False)
+            label = "random"
+
+        # h5py needs a sorted, unique index list for fancy selection.
+        order = np.asarray(order)
+        srt = np.sort(order)
+        cubes = h["data"][srt]
+        back = {int(v): i for i, v in enumerate(srt)}
+        cubes = np.stack([cubes[back[int(i)]] for i in order])
+
+        meta = {c: h[c][:][order] for c in
+                ["frequency", "driftRate", "snr", "beam", "numChannels"]}
+        src = decode(h["sourceName"][:])[order]
+        tsamp = float(h["tsamp"][0])
+        foff_hz = float(h["foff"][0]) * 1e6
+
+    ncol = args.ncol
+    nrow = int(np.ceil(len(order) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(2.5 * ncol, 2.6 * nrow))
+    axes = np.atleast_1d(axes).ravel()
+    fig.suptitle(
+        f"{name}  --  {label}  "
+        f"(x: {foff_hz:.2f} Hz/channel,  y: {tsamp:.2f} s/step, time downward)",
+        fontsize=12)
+
+    for k, ax in enumerate(axes):
+        if k >= len(order):
+            ax.axis("off")
+            continue
+        img, nvalid = clean_stamp(cubes[k])
+        ax.imshow(norm_stamp(img), aspect="auto", origin="upper",
+                  cmap="viridis", norm=LogNorm(),
+                  interpolation="nearest")
+        ax.set_title(
+            f"{meta['frequency'][k]:.6f} MHz\n"
+            f"SNR {meta['snr'][k]:.3g}  dr {meta['driftRate'][k]:+.3f}  "
+            f"b{meta['beam'][k]}",
+            fontsize=6.5)
+        ax.set_xticks([]); ax.set_yticks([])
+
+    fig.tight_layout()
+    savefig(fig, f"{name}_stamps_{args.sort}.png")
+
+    print("\n  first few shown:")
+    for k in range(min(6, len(order))):
+        print(f"    idx={order[k]:>8d}  {meta['frequency'][k]:14.6f} MHz  "
+              f"SNR={meta['snr'][k]:>11.4g}  drift={meta['driftRate'][k]:+.4f}  "
+              f"beam={meta['beam'][k]:>2d}  nchan={meta['numChannels'][k]:>3d}  "
+              f"src={src[k]}")
+
+
+# ----------------------------------------------------------------------------
+# cmd: obs -- one observation, beam vs frequency
+# ----------------------------------------------------------------------------
+
+def cmd_obs(args):
+    f = resolve_files([args.file])[0]
+    name = os.path.basename(f).replace(".h5", "")
+    with h5py.File(f, "r") as h:
+        obsid = decode(h["obsid"][:])
+        uniq, counts = np.unique(obsid, return_counts=True)
+        target = args.obsid or uniq[np.argmax(counts)]
+        if target not in set(uniq):
+            sys.exit(f"obsid {target!r} not present. Options include: "
+                     f"{list(uniq[:5])}")
+        m = obsid == target
+        beam = h["beam"][:][m]
+        freq = h["frequency"][:][m]
+        snr = h["snr"][:][m]
+        dr = h["driftRate"][:][m]
+
+    print(f"  observation {target}: {m.sum():,} hits, "
+          f"{len(np.unique(beam))} beams populated")
+
+    fig, ax = plt.subplots(2, 1, figsize=(15, 9),
+                           gridspec_kw={"height_ratios": [2, 1]})
+    fig.suptitle(f"{name}  --  {target}  ({m.sum():,} hits)", fontsize=12)
+
+    # A vertical stripe here = one frequency seen in every beam = RFI.
+    sc = ax[0].scatter(freq, beam, c=np.log10(snr), s=4, cmap="magma",
+                       alpha=0.7, rasterized=True)
+    ax[0].set_xlabel("frequency [MHz]"); ax[0].set_ylabel("beam")
+    ax[0].set_title("beam vs frequency -- vertical stripes are field-wide RFI")
+    fig.colorbar(sc, ax=ax[0], label="log10(SNR)")
+
+    # How many distinct beams share each frequency (1 Hz tolerance)?
+    nb = beams_per_frequency(freq, beam, tol_hz=args.tol)
+    ax[1].hist(nb, bins=np.arange(0.5, 66.5, 1), color="#a5533b")
+    ax[1].set_xlabel(f"number of distinct beams within {args.tol:g} Hz")
+    ax[1].set_ylabel("hits"); ax[1].set_yscale("log")
+    ax[1].set_title("multi-beam coincidence -- few beams = plausibly on-sky")
+
+    fig.tight_layout()
+    savefig(fig, f"{name}_obs.png")
+
+
+def beams_per_frequency(freq_mhz, beam, tol_hz=1.0):
+    """
+    For each hit, count how many DISTINCT beams have a hit within tol_hz.
+
+    This is the cheapest and most powerful RFI discriminant available from
+    metadata alone: a real sky signal lands in one or a few coherent beams,
+    while local interference lights up the whole field. Compare the multibeam
+    spatial filtering in Tremblay et al. 2026 (K2-18b, VLA+MeerKAT).
+
+    O(n log n) via a sorted sweep.
+    """
+    f_hz = np.asarray(freq_mhz, dtype=np.float64) * 1e6
+    order = np.argsort(f_hz)
+    fs, bs = f_hz[order], np.asarray(beam)[order]
+    lo = np.searchsorted(fs, fs - tol_hz, side="left")
+    hi = np.searchsorted(fs, fs + tol_hz, side="right")
+    out = np.empty(len(fs), dtype=np.int32)
+    for i in range(len(fs)):
+        out[i] = len(np.unique(bs[lo[i]:hi[i]]))
+    res = np.empty_like(out)
+    res[order] = out
+    return res
+
+
+# ----------------------------------------------------------------------------
+# cmd: coincidence
+# ----------------------------------------------------------------------------
+
+def cmd_coincidence(args):
+    f = resolve_files([args.file])[0]
+    name = os.path.basename(f).replace(".h5", "")
+    with h5py.File(f, "r") as h:
+        obsid = decode(h["obsid"][:])
+        beam = h["beam"][:]
+        freq = h["frequency"][:]
+        snr = h["snr"][:]
+        dr = h["driftRate"][:]
+
+    nb = np.zeros(len(freq), dtype=np.int32)
+    for o in np.unique(obsid):
+        m = obsid == o
+        nb[m] = beams_per_frequency(freq[m], beam[m], tol_hz=args.tol)
+
+    n = len(nb)
+    print(f"\n  {name}: {n:,} hits across {len(np.unique(obsid))} observations")
+    print(f"  multi-beam coincidence within {args.tol:g} Hz:")
+    for thr in (1, 2, 4, 8, 16, 32):
+        k = int(np.sum(nb <= thr))
+        print(f"    hits in <= {thr:>2d} beams : {k:>9,}  ({100 * k / n:5.2f}%)")
+    surv = (nb <= args.max_beams) & (dr != 0)
+    print(f"\n  combined cut (<= {args.max_beams} beams AND non-zero drift): "
+          f"{int(surv.sum()):,} hits ({100 * surv.mean():.3f}%)")
+    if surv.any():
+        print(f"  survivors: SNR {snr[surv].min():.1f} .. {snr[surv].max():.4g}, "
+              f"median {np.median(snr[surv]):.1f}")
+
+    fig, ax = plt.subplots(1, 2, figsize=(13, 5))
+    fig.suptitle(f"{name}  --  multi-beam coincidence "
+                 f"({args.tol:g} Hz tolerance)", fontsize=12)
+    ax[0].hist(nb, bins=np.arange(0.5, 66.5, 1), color="#3b6ea5")
+    ax[0].set_yscale("log"); ax[0].set_xlabel("distinct beams within tolerance")
+    ax[0].set_ylabel("hits"); ax[0].set_title("coincidence multiplicity")
+
+    ax[1].scatter(nb + np.random.uniform(-.3, .3, n), snr, s=1, alpha=0.1,
+                  color="#222222", rasterized=True)
+    ax[1].set_yscale("log"); ax[1].set_xlabel("distinct beams within tolerance")
+    ax[1].set_ylabel("SNR"); ax[1].set_title("SNR vs multiplicity")
+
+    fig.tight_layout()
+    savefig(fig, f"{name}_coincidence.png")
+
+
+# ----------------------------------------------------------------------------
+
+def main():
+    p = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("info", help="schema and summary for each file")
+    s.add_argument("files", nargs="*")
+    s.set_defaults(func=cmd_info)
+
+    s = sub.add_parser("meta", help="metadata distribution plots")
+    s.add_argument("file")
+    s.set_defaults(func=cmd_meta)
+
+    s = sub.add_parser("stamps", help="grid of stamp waterfalls")
+    s.add_argument("file")
+    s.add_argument("--n", type=int, default=24)
+    s.add_argument("--ncol", type=int, default=6)
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--sort", default="random",
+                   choices=["random", "snr", "drift", "nonzero-drift"])
+    s.set_defaults(func=cmd_stamps)
+
+    s = sub.add_parser("obs", help="beam vs frequency for one observation")
+    s.add_argument("file")
+    s.add_argument("--obsid", default=None)
+    s.add_argument("--tol", type=float, default=1.0, help="Hz")
+    s.set_defaults(func=cmd_obs)
+
+    s = sub.add_parser("coincidence", help="multi-beam coincidence statistics")
+    s.add_argument("file")
+    s.add_argument("--tol", type=float, default=1.0, help="Hz")
+    s.add_argument("--max-beams", type=int, default=4)
+    s.set_defaults(func=cmd_coincidence)
+
+    args = p.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,8 @@
+cut,flagged_alone,pct_alone,removed_here,remaining,pct_remaining
+known-RFI frequency mask,13673,90.4358753885839,13673,1446,9.5641246114161
+drift rate exactly zero,0,0.0,0,1446,9.5641246114161
+SNR below window,2707,17.904623321648256,453,993,6.567894702030557
+SNR above window (instrumental),0,0.0,0,993,6.567894702030557
+multi-beam coincidence,918,6.071830147496527,87,906,5.992459818771083
+coherent/incoherent ratio,0,0.0,0,906,5.992459818771083
+cross-epoch persistence,3267,21.60857199550235,0,906,5.992459818771083
