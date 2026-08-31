@@ -1,0 +1,2 @@
+file,row,obsid,sourceName,frequency,driftRate,snr,n_beams,f12_bandwidth_hz
+mk_sample_hits,1015,MeerKAT:array_1:20250731T134912Z,Gaia_5983581792059062400,874.9959401935339,-0.18662893100418113,365.6717,3,1.5944242477416992

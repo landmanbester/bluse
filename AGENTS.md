@@ -33,8 +33,13 @@ aug_2026_workshop/
   explore.py                     visual exploration of the raw HDF5
   rfi_masks.py                   MeerKAT RFI masks, provenance-tagged
   track_a_filter.py              Track A: classical filtering baseline
+  features.py                    Track B: extensible feature registry
+  track_b_features.py            Track B: feature extraction driver
+  track_b_cluster.py             Track B: HDBSCAN clustering
   data/                          7 HDF5 files, 21 GB (untracked)
   catalogues/                    Track A output (.csv tracked, .parquet not)
+  features/                      Track B feature matrices (untracked, ~350 MB)
+  clusters/                      Track B clustering output
   masks/                         empirically derived RFI masks
   plots/                         PNGs from explore.py (untracked)
   .venv/                         python 3.11 env (untracked)
@@ -134,7 +139,17 @@ tstart tstartts fileoffset telescopeId sourceName obsid filename data`
    The default augmentation lists in the literature are written for galaxy images
    and are actively wrong here.
 
-7. **Compression.** The six band files are gzip-chunked at one stamp per chunk:
+7. **Two files have corrupt stamp cubes.** Verified by block-scanning `data`:
+   `lband_short.h5` rows **338,000–742,000** (404,000 rows, 46.65%) and
+   `uhf_long.h5` rows **264,000–270,000** (6,000 rows, 2.00%) raise
+   `OSError: wrong B-tree signature`. Each is a single contiguous mid-file
+   region with a readable tail — the signature of a bad transfer, not
+   truncation. **Metadata columns are unaffected**, so Track A (metadata-only)
+   is complete and correct; Track B loses those stamps and marks them
+   `stamp_ok=False`. Re-copying those two files would recover 410,000 hits.
+   `track_b_features.py:scan_bad_regions()` probes cheaply and skips them.
+
+8. **Compression.** The six band files are gzip-chunked at one stamp per chunk:
    random access to individual stamps is cheap, bulk reads are CPU-bound on
    decompression. `mk_sample_hits.h5` is uncompressed and contiguous.
 
@@ -165,11 +180,40 @@ for the whole dataset. Output in `catalogues/*_cat.parquet`, which carries all
 original metadata plus `n_beams`, `n_obs_at_freq`, `log_snr`, `log_power`,
 `abs_drift`, the flags, and `row` (index back into the HDF5 stamp cube).
 
-**Next — Track B**: the GLOBULAR feature set (13 hand-crafted features per hit,
-Brzycki et al. 2025) computed over the stamp cubes, then HDBSCAN, to produce a
-named RFI taxonomy. Then Tracks C (Astronomaly human-in-the-loop), E
-(weak-supervision classifier trained on free labels from the spatial filter), and
-D (self-supervised, GPU, stretch). See `brainstorming.md`.
+**Done — Track B** (`features.py`, `track_b_features.py`, `track_b_cluster.py`):
+
+- `features.py` is an extensible **registry**. Decorate a function with
+  `@meta_feature(...)` (vectorised over the catalogue) or `@stamp_feature(...)`
+  (vectorised over a batch of stamps) and it is picked up automatically; one
+  function may emit several columns when they share expensive work. Features
+  return **raw** values; the GLOBULAR log/quantile/unit transforms are applied
+  separately by `normalise()`, so both forms reach Track E.
+- All 13 GLOBULAR features (Brzycki et al. 2025) plus 3 BLUSE-specific extras.
+  **They are not numerically comparable to published GLOBULAR values**: our
+  spectral window is ~121–196 Hz against their 2.7 kHz, which is narrower than
+  their *minimum* sweep bandwidth. `f08_turning_bw_hz` is consequently
+  unresolved for ~72% of hits (companion `f08_turning_bw_saturated` flag; the
+  clusterer excludes it by default).
+- Extraction over all 2,022,171 hits takes ~7 min; 1,612,171 have usable
+  features (the shortfall is the corruption in gotcha 7).
+- Clustering follows GLOBULAR's iterative batching. **The batching is integral,
+  not a memory workaround** — their hyperparameters are tuned for ~3000-point
+  batches and give 10 clusters instead of 205 on one large pass.
+
+**Two known gaps in Track B**, both documented in `track_b_cluster.py`:
+cross-batch cluster matching is **not implemented**, so cluster ids are not
+comparable between batches and the same RFI family appears several times; and
+scaling had to be added beyond GLOBULAR's spec (`--scaling robust`, default)
+because their transforms alone leave feature IQRs spanning 0.036 to 5.88 on our
+data, so Euclidean distance became drift rate and nothing else.
+
+**Next — Track E**: weak-supervision classifier. `features/*_features.parquet`
+already carries `weak_label` (1 RFI / 0 spatially-confined / −1 ambiguous),
+`weak_label_reason` and `group_id`. **Split on `group_id`** — hits from one
+observation share a pointing, an RFI environment and a calibration, so a random
+row split leaks. Label 0 means *spatially confined*, not *verified clean*:
+positive-unlabelled learning is the honest framing. Then Tracks C (Astronomaly)
+and D (self-supervised, GPU, stretch). See `brainstorming.md`.
 
 **Three Track A parameters are unresolved judgement calls** — the ITU masks, the
 digital-TV comb (off by default; enabling it masks all of UHF), and `--tol-steps`
