@@ -41,13 +41,23 @@ from __future__ import annotations
 
 import numpy as np
 
+from . import diagnostics
+
 
 def centroids(labels, X):
-    """(cluster ids, their centroids in the columns of X)."""
-    ids = np.unique(labels[labels >= 0])
-    C = (np.vstack([X[labels == c].mean(axis=0) for c in ids]) if len(ids)
-         else np.zeros((0, X.shape[1])))
-    return ids, C
+    """
+    (cluster ids, their centroids in the columns of X).
+
+    Grouped by sort + reduceat rather than a mask per cluster: the latter is
+    O(k*n), which is minutes at the ~80,000 clusters `leaf` produces on
+    all_features.parquet. See diagnostics.group_index.
+    """
+    ids, rows, starts = diagnostics.group_index(labels)
+    if not len(ids):
+        return ids, np.zeros((0, X.shape[1]))
+    counts = np.diff(np.append(starts, len(rows)))
+    sums = np.add.reduceat(np.asarray(X)[rows], starts, axis=0)
+    return ids, sums / counts[:, None]
 
 
 def _nn_distances(C):

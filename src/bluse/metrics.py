@@ -38,17 +38,31 @@ def _sizes(labels):
     return counts[counts > 0]
 
 
-def _narrow(labels, freq, thresh):
-    """(hits in clusters narrower than `thresh`, count of such clusters)."""
-    hits = 0
-    n_cl = 0
-    for c in np.unique(labels[labels >= 0]):
-        m = labels == c
-        f = freq[m]
-        if f.max() - f.min() < thresh:
-            hits += int(m.sum())
-            n_cl += 1
-    return hits, n_cl
+def _spans(labels, freq):
+    """(cluster ids, per-cluster frequency span, per-cluster size)."""
+    from .diagnostics import group_index
+    ids, rows, starts = group_index(labels)
+    if not len(ids):
+        return ids, np.array([]), np.array([], dtype=int)
+    f = np.asarray(freq)[rows]
+    spans = (np.maximum.reduceat(f, starts) - np.minimum.reduceat(f, starts))
+    counts = np.diff(np.append(starts, len(rows)))
+    return ids, spans, counts
+
+
+def _narrow(labels, freq, thresh, cache=None):
+    """
+    (hits in clusters narrower than `thresh`, count of such clusters).
+
+    `cache` is an optional (ids, spans, counts) triple from _spans, so the
+    grouping is done once per labelling rather than once per threshold and
+    once per permutation -- quality() calls this seven times.
+    """
+    ids, spans, counts = cache if cache is not None else _spans(labels, freq)
+    if not len(ids):
+        return 0, 0
+    m = spans < thresh
+    return int(counts[m].sum()), int(m.sum())
 
 
 def _enrichment(labels, weak):
@@ -86,19 +100,22 @@ def _enrichment(labels, weak):
     if n_pos == 0 or n_pos == m_pop:
         return float("nan")
 
-    ps, sizes = [], []
-    for c in np.unique(labels[labels >= 0]):
-        m = (labels == c) & known
-        n_in = int(m.sum())
-        if n_in == 0:
-            continue
-        k = int((weak[m] == 0).sum())
-        sizes.append(int((labels == c).sum()))
-        ps.append(float(hypergeom.sf(k - 1, m_pop, n_pos, n_in)))
-    if not ps:
+    from .diagnostics import group_index
+    ids, rows, starts = group_index(labels)
+    if not len(ids):
         return float("nan")
+    counts = np.diff(np.append(starts, len(rows)))
+    lab_known = known[rows].astype(np.int64)
+    n_in = np.add.reduceat(lab_known, starts)
+    n_zero = np.add.reduceat(((weak[rows] == 0) & known[rows]).astype(np.int64),
+                             starts)
+    keep = n_in > 0
+    if not keep.any():
+        return float("nan")
+    ps = hypergeom.sf(n_zero[keep] - 1, m_pop, n_pos, n_in[keep])
+    sizes = counts[keep]
 
-    ps = np.asarray(ps)
+    ps = np.asarray(ps, dtype=np.float64)
     sizes = np.asarray(sizes)
     order = np.argsort(ps)
     m_tests = len(ps)
@@ -141,9 +158,10 @@ def quality(labels, df, *, narrow_mhz=NARROW_MHZ, n_perm=5, seed=0):
     # String keys: float keys survive neither a JSON round-trip nor an equality
     # comparison after one, and <tag>_metrics.json carries this dict.
     thresholds = tuple(narrow_mhz)
+    span_cache = _spans(labels, freq)
     at = {}
     for t in thresholds:
-        hits, n_cl = _narrow(labels, freq, t)
+        hits, n_cl = _narrow(labels, freq, t, span_cache)
         at[f"{t:g}"] = hits / n_clustered
         if t == thresholds[-1]:
             out["narrow_clusters"] = n_cl
@@ -156,8 +174,8 @@ def quality(labels, df, *, narrow_mhz=NARROW_MHZ, n_perm=5, seed=0):
     # arithmetic. Permuting the label VECTOR preserves the cluster size
     # distribution exactly, which is the confound being controlled for.
     rng = np.random.default_rng(seed)
-    nulls = [_narrow(rng.permutation(labels), freq, thresholds[-1])[0]
-             / n_clustered for _ in range(max(1, n_perm))]
+    nulls = [_narrow(p, freq, thresholds[-1], _spans(p, freq))[0] / n_clustered
+             for p in (rng.permutation(labels) for _ in range(max(1, n_perm)))]
     out["narrow_frac_null"] = float(np.mean(nulls))
     # 0/0 is undefined, not infinite. A permuted labelling of a wideband file
     # routinely produces NO narrow clusters at all, and reporting inf there
@@ -170,9 +188,7 @@ def quality(labels, df, *, narrow_mhz=NARROW_MHZ, n_perm=5, seed=0):
     else:
         out["narrow_enrichment"] = float("nan")
 
-    spans = [float(freq[labels == c].max() - freq[labels == c].min())
-             for c in np.unique(labels[labels >= 0])]
-    out["median_span_mhz"] = float(np.median(spans))
+    out["median_span_mhz"] = float(np.median(span_cache[1]))
 
     if "weak_label" in df.columns:
         from sklearn.metrics import adjusted_mutual_info_score

@@ -166,3 +166,36 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
             "flags": flags,
         })
     return out
+
+
+def group_index(labels):
+    """
+    Sort-based grouping for a label vector. Returns (ids, rows, starts).
+
+    `rows` are the original row indices of the clustered points, ordered so
+    that group `ids[j]` occupies `rows[starts[j]:starts[j+1]]`. Feed `starts`
+    to np.add.reduceat / np.minimum.reduceat / np.maximum.reduceat.
+
+    Use this instead of a mask per cluster. `X[labels == c]` inside a loop over
+    k clusters is O(k*n) and it was the pattern in four places here. Measured on
+    1,281,878 rows x 15 columns:
+
+        k =  1,491   mask-per-cluster ~3.3 s     sort + reduceat 0.22 s
+        k = 20,000   mask-per-cluster ~47 s      sort + reduceat 0.23 s
+
+    The sort is O(n log n) once and flat in k, which matters because `leaf` on
+    all_features.parquet produces of order 80,000 clusters -- where the mask
+    pattern is minutes in centroids() alone, and worse in quality(), which
+    groups seven times per call (two thresholds plus five permutations).
+    """
+    labels = np.asarray(labels)
+    rows = np.nonzero(labels >= 0)[0]
+    if not len(rows):
+        return np.array([], dtype=labels.dtype), rows, np.array([], dtype=int)
+    lab = labels[rows]
+    order = np.argsort(lab, kind="stable")
+    rows = rows[order]
+    lab = lab[order]
+    ids = np.unique(lab)
+    starts = np.searchsorted(lab, ids)
+    return ids, rows, starts
