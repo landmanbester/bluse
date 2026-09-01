@@ -29,6 +29,8 @@ papers/                          reference papers + our summaries
   GLOBULAR-technical-reference.md      ... dense, plus a map onto our code
   Tremblay-overview.md           where Track A comes from, for humans
   Tremblay-technical-reference.md      ... dense, plus a map onto our code
+  Myburgh-overview.md            the same chain on blind targets, for humans
+  Myburgh-technical-reference.md       ... dense, plus a map onto our code
   *.pdf                          source papers (untracked -- see .gitignore)
 
 pyproject.toml                   installable package, uv_build backend
@@ -295,18 +297,28 @@ across the whole delivery and stable between the HDF5 files and
 **Done — Track A** (`track_a_filter.py`): classical baseline following Tremblay
 et al. 2026. Seven cuts: RFI frequency masks, zero drift, **max drift**, SNR
 window, multi-beam coincidence (**±1 fine channel**, ±1 drift step, per
-observation), coherent/incoherent ratio (inert), cross-epoch persistence
-(frequency **and** drift). **1,619,794 → 5,692 survivors (0.351%)**, ~20 s for
-the whole dataset. Output in `catalogues/*_cat.parquet`, which carries all
+observation), coherent/incoherent ratio (inert, now **two-sided**), cross-epoch
+persistence (frequency **and** drift). The SNR floor is **raised to 15 for hits
+under 16 timesteps**, and the max-drift cut is implemented but **off by
+default**. **1,619,794 → 5,355 survivors (0.331%)**, ~20 s for the whole
+dataset. Output in `catalogues/*_cat.parquet`, which carries all
 original metadata plus `n_beams`, `n_obs_at_freq`, `n_obs_at_freq_drift`,
 `log_snr`, `log_power`, `abs_drift`, `max_drift_hz_s`, the flags, and `row`
 (index back into the HDF5 stamp cube).
 
-The bolded items are 2026-09 corrections found by reading the paper against the
-code; together they cost 19.3% of the survivors (7,056 → 5,692 on the same
-files). The multi-beam tolerance was the big one: the rule is ±1 *fine channel*
-and ours are 1.013–1.630 Hz, so a hardcoded 1.0 Hz matched ~37% too tightly in L
-and S band. See `papers/Tremblay-technical-reference.md` §6.
+The bolded items are 2026-09 corrections found by reading Tremblay et al. 2026
+and Myburgh et al. 2026 against the code; net 7,056 → 5,355 on the same files.
+Three things to carry:
+
+- **The multi-beam tolerance is ±1 fine CHANNEL, not ±1 Hz.** Ours are
+  1.013–1.630 Hz, so a hardcoded 1.0 matched ~37% too tightly in L and S band.
+  Biggest single effect. `papers/Tremblay-technical-reference.md` §6.2.
+- **`uhf_short` is 14–15 timesteps for all 208,774 hits** — the regime three
+  separate papers warn produces mostly false positives. Its SNR floor is 15.
+  `papers/Myburgh-technical-reference.md` §3.
+- **The two source papers contradict each other on the coherent/incoherent
+  test**, and ours implemented the less useful half. Now two-sided; still inert.
+  `papers/Myburgh-technical-reference.md` §5.
 
 **Done — Track B** (`features.py`, `track_b_features.py`, `track_b_cluster.py`):
 

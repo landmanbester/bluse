@@ -125,13 +125,13 @@ parquet — no need to re-run.
 | File | Hits | Survivors | % | was |
 |---|---:|---:|---:|---:|
 | `lband_long` | 557,690 | 568 | 0.102 | 853 |
-| `lband_short_clean` | 463,625 | 670 | 0.145 | 928 |
+| `lband_short_clean` | 463,625 | 740 | 0.160 | 928 |
 | `uhf_long` | 299,878 | 2,281 | 0.761 | 2,406 |
-| `uhf_short` | 208,774 | 1,193 | 0.571 | 1,870 |
+| `uhf_short` | 208,774 | 786 | 0.376 | 1,870 |
 | `sband_long` | 36,132 | 43 | 0.119 | 47 |
 | `sband_short` | 38,576 | 43 | 0.111 | 46 |
 | `mk_sample_hits` | 15,119 | 894 | 5.913 | 906 |
-| **total** | **1,619,794** | **5,692** | **0.351** | **7,056** |
+| **total** | **1,619,794** | **5,355** | **0.331** | **7,056** |
 
 The total is over the corrected set (`lband_short_clean`, not `lband_short`).
 The `was` column is the same set before the 2026-09 corrections below, so it is
@@ -174,6 +174,31 @@ the new `n_obs_at_freq_drift`.
 defaults to 1e6, because our data has a detached population at 1e7–1e8 that we
 want to see rather than silently drop. `--snr-max 100` gives the literal recipe,
 and `flag_snr_high` is recorded either way.
+
+### Then Myburgh et al. 2026 changed two of those decisions
+
+Reading the VLA high-frequency paper
+([`papers/Myburgh-overview.md`](../papers/Myburgh-overview.md)) — same group,
+but **blind Gaia targets like ours rather than one known planet** — moved two
+more things.
+
+**The maximum drift cut is now OFF by default.** Myburgh et al. search
+±50 Hz/s deliberately, "as many of our targets are toward unknown planetary
+systems". So are ours. Worse, our K2-18-derived limit was biting *inside* the
+range `seticore` actually searched: on `lband_short_clean` it lands at
+0.358–0.402 Hz/s against an observed maximum of 0.4203, with 4,257 hits at the
+extreme `driftSteps` — exactly where a fast-drifting real signal would sit. In a
+blind survey a false negative costs more than one more waterfall to inspect.
+`--max-drift-coeff 4.18e-4` restores it. (`lband_short_clean` 670 → 740.)
+
+**A duration-conditioned SNR floor is now ON.** Their filter 3 requires SNR > 15
+for hits with fewer than 16 time samples, because `seticore`'s noise estimate
+needs samples to average. Three papers say this independently — Tremblay §3.3
+measured ~80% of 8σ detections with few samples to be false positives, and Czech
+et al. §6 call beams under 150 s unviable. **`uhf_short` is 14–15 timesteps for
+every one of its 208,774 hits**, and 456 of its 1,193 survivors had SNR ≤ 15.
+No other file is affected. (`uhf_short` 1,193 → 786.) `--snr-min-short 0`
+disables it.
 
 **The clean file's survivors are not a subset of the original's.** Comparing by
 hit `id` under the corrected parameters: 662 survive in both, 66 survive only in

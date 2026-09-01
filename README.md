@@ -114,7 +114,7 @@ data/*.h5                      1,619,794 hits, 21 GB of stamp cubes
     │  bluse-track-a           metadata only — never touches the cubes, ~20 s
     ▼
 catalogues/*_cat.parquet       every hit + 8 boolean flag_* columns + pass_all
-    │                          5,692 survive all cuts (0.351%)
+    │                          5,355 survive all cuts (0.331%)
     │
     │  bluse-features          streams the cubes, ~7 min
     ▼
@@ -138,8 +138,11 @@ only:
 2. **Zero drift rate** — a signal that does not Doppler-drift is not moving
    relative to the telescope, so it is local.
 3. **Maximum drift rate** — nothing bound to a star drifts arbitrarily fast.
-   The bound scales with observing frequency.
-4. **SNR window** — below is mostly false positives, above is instrumental.
+   Implemented, **off by default**: the published bound is derived for one known
+   planetary system and ours is a blind survey. `--max-drift-coeff` enables it.
+4. **SNR window** — below is mostly false positives, above is instrumental. The
+   floor is raised for short integrations, where the pipeline's noise estimate
+   has too few samples to be reliable.
 5. **Multi-beam coincidence** — the strongest discriminant available here.
    A signal appearing in most of a 64-beam field is not on the sky.
 6. **Coherent/incoherent power ratio** — implemented, but inert: BLUSE never
@@ -310,6 +313,8 @@ aug_2026_workshop/       the working record: results, findings, decisions
 papers/                  reference literature + our summaries
     Tremblay-*.md        where Track A comes from: overview (human) and
                          technical reference (dense, maps onto our code)
+    Myburgh-*.md         the same chain on blind targets — three extra
+                         filters, and a contradiction worth knowing
     GLOBULAR-*.md        the Track B method, same pair
 AGENTS.md                notes for agents working in this repo — including a
                          list of gotchas that cost real debugging time

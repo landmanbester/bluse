@@ -145,8 +145,18 @@ def cut_max_drift(df, coeff):
     2. The paper does not apply its own prescription. Section 3.2 gives the
        frequency-scaled limits above; section 4 then applies a blanket
        +/-1.9 Hz/s -- the 4.5 GHz value -- to L, S and C band alike, and only
-       X band follows the rule. We follow 3.2, the version the text argues for.
-       See papers/Tremblay-technical-reference.md section 7.1.
+       X band follows the rule. See papers/Tremblay-technical-reference.md
+       section 7.1.
+
+    OFF BY DEFAULT since 2026-09. Myburgh et al. 2026 -- same group, blind Gaia
+    targets, i.e. our situation rather than K2-18's -- deliberately search
+    +/-50 Hz/s "as many of our targets are toward unknown planetary systems".
+    Ours are too. And the limit bites inside the range seticore actually
+    searched: on lband_short_clean it lands at 0.358-0.402 Hz/s against an
+    observed maximum of 0.4203, with 4,257 hits sitting at the extreme
+    driftSteps -- exactly where a genuinely fast-drifting signal would be. In a
+    blind survey a false negative costs more than a human looking at one more
+    waterfall, so the cut stays available and stays off.
     """
     if not coeff:
         df["flag_drift_high"] = np.zeros(len(df), dtype=bool)
@@ -157,9 +167,28 @@ def cut_max_drift(df, coeff):
     return df
 
 
-def cut_snr_window(df, snr_min, snr_max):
+def cut_snr_window(df, snr_min, snr_max, snr_min_short=None, short_nt=16):
+    """
+    SNR window, with a raised floor for short integrations.
+
+    Myburgh et al. 2026 filter 3: seticore's noise estimate degrades when there
+    are few time samples to average, so a short hit needs more SNR to be
+    believable. They require SNR > 15 below 16 timesteps and SNR > 10 above.
+    Tremblay et al. 2026 sec 3.3 measured the same effect from the other end --
+    ~80% of 8-sigma detections with few time samples were false positives -- and
+    Czech et al. 2026 sec 6 separately calls beams shorter than 150 s unviable.
+    Three independent statements of one problem.
+
+    It matters here because uhf_short is 14-15 timesteps throughout: every one
+    of its hits is in the regime all three papers warn about.
+    """
     s = df["snr"].to_numpy()
-    df["flag_snr_low"] = s < snr_min
+    lo = np.full(len(df), float(snr_min))
+    if snr_min_short and "numTimesteps" in df.columns:
+        short = df["numTimesteps"].to_numpy() < short_nt
+        lo[short] = float(snr_min_short)
+    df["snr_floor"] = lo
+    df["flag_snr_low"] = s < lo
     df["flag_snr_high"] = s > snr_max
     return df
 
@@ -253,13 +282,41 @@ def cut_multibeam(df, tol_hz, tol_steps, max_beams, verbose=True):
 # cut 5: coherent / incoherent power ratio
 # ---------------------------------------------------------------------------
 
-def cut_incoherent(df, n_ants, verbose=True):
+def cut_incoherent(df, n_ants, tol=2.0, verbose=True):
     """
-    Flag hits violating SNR_coherent <= sqrt(N_ant) * SNR_incoherent.
+    Flag hits whose coherent/incoherent ratio is inconsistent with a sky source.
 
-    A signal genuinely localised on the sky gains coherently; interference
-    entering through the sidelobes does not. Tremblay et al. 2026 use exactly
-    this test.
+    THE TEST IS TWO-SIDED, and an earlier version of this function got that
+    wrong. Coherent summation of N antennas gains signal power as N^2 against
+    noise as N; the incoherent sum gains neither. So for a source actually at
+    the beam centre the ratio sits AT roughly sqrt(N) -- and interference,
+    which does not phase up, falls well SHORT of it. Flagging only ratio >
+    sqrt(N) therefore caught the physically impossible tail and missed the
+    entire real RFI population, which is the half worth catching.
+
+    The two source papers state it in opposite directions, which is why this
+    was easy to get wrong:
+
+      Tremblay et al. 2026 sec 3.7   "a signal of the same origin ... will have
+                                     SNR_coh <= sqrt(N) * SNR_incoh"
+                                     -- i.e. an inequality a REAL signal obeys
+      Myburgh et al. 2026 filter 7   "if coherent_S/N <= sqrt(N) *
+                                     incoherent_S/N then the signal is most
+                                     likely RFI"
+                                     -- i.e. the same inequality means RFI
+
+    Read literally they contradict each other. The physics, plus Tremblay's own
+    section 4.1 (they look for hits showing "an expected power ratio (4.69)",
+    which is sqrt(22)) and Myburgh's Figure 5 caption ("coherent power not
+    sufficiently greater than its incoherent power, marking it as non-localized
+    interference"), agree that the discriminant is the ratio being NEAR
+    sqrt(N). Both tails are interference. That is what we implement; `tol` is
+    the factor of slack either side and is ours, not from either paper.
+
+    CAVEAT: both papers state the relation in SNR. Our columns are `power` and
+    `incoherentPower`, so we are applying an SNR relation to a power ratio.
+    That substitution is unverified and must be checked against real data
+    before this cut is trusted -- see papers/Myburgh-technical-reference.md.
 
     The BLUSE team have confirmed incoherentPower was never measured for this
     dataset, so this cut is inert here and will stay that way -- it is not
@@ -280,11 +337,16 @@ def cut_incoherent(df, n_ants, verbose=True):
     ratio = np.full(len(df), np.nan)
     ratio[have] = p[have] / ip[have]
     df["coh_ratio"] = ratio
-    # Ratio above sqrt(N) is impossible for a sky signal -> local interference.
-    df["flag_incoherent"] = have & (ratio > np.sqrt(n_ants))
+    expect = np.sqrt(n_ants)
+    too_high = ratio > expect * tol       # impossible for a sky signal
+    too_low = ratio < expect / tol        # never phased up -> not localised
+    df["flag_incoherent"] = have & (too_high | too_low)
     if verbose:
         print(f"      incoherent test applied to {int(have.sum()):,} hits "
-              f"(threshold sqrt({n_ants}) = {np.sqrt(n_ants):.2f})")
+              f"(expect ~sqrt({n_ants}) = {expect:.2f}, "
+              f"accepting {expect / tol:.2f}-{expect * tol:.2f}); "
+              f"{int((have & too_low).sum()):,} below, "
+              f"{int((have & too_high).sum()):,} above")
     return df
 
 
@@ -486,14 +548,19 @@ def process(path, args, mask_table):
     else:
         print("  [3] max drift rate (disabled)")
     df = cut_max_drift(df, args.max_drift_coeff)
-    print(f"  [4] SNR window [{args.snr_min}, {args.snr_max:g}]")
-    df = cut_snr_window(df, args.snr_min, args.snr_max)
+    nshort = int((df["numTimesteps"] < args.short_timesteps).sum())
+    print(f"  [4] SNR window [{args.snr_min}, {args.snr_max:g}]"
+          + (f", floor {args.snr_min_short} for the {nshort:,} hits under "
+             f"{args.short_timesteps} timesteps" if args.snr_min_short and nshort
+             else ""))
+    df = cut_snr_window(df, args.snr_min, args.snr_max,
+                        args.snr_min_short, args.short_timesteps)
     print(f"  [5] multi-beam coincidence "
           f"(+/-{tol_hz:g} Hz [{tol_src}], +/-{args.tol_steps} steps, "
           f"max {args.max_beams} beams)")
     df = cut_multibeam(df, tol_hz, args.tol_steps, args.max_beams)
     print("  [6] coherent/incoherent ratio")
-    df = cut_incoherent(df, args.n_ants)
+    df = cut_incoherent(df, args.n_ants, args.coh_ratio_tol)
     print(f"  [7] cross-epoch persistence (>= {args.min_obs} observations "
           f"at matching frequency AND drift)")
     df = cut_repeat(df, args.repeat_tol_hz, args.min_obs, args.repeat_tol_steps)
@@ -550,6 +617,14 @@ def main():
     g = p.add_argument_group("cut parameters")
     g.add_argument("--snr-min", type=float, default=10.0,
                    help="below this is mostly false positives (default 10)")
+    g.add_argument("--snr-min-short", type=float, default=15.0,
+                   help="raised SNR floor for short integrations, where "
+                        "seticore's noise estimate is least reliable "
+                        "(default 15, per Myburgh+2026 filter 3). Set 0 to "
+                        "use --snr-min everywhere")
+    g.add_argument("--short-timesteps", type=int, default=16,
+                   help="a hit with fewer timesteps than this is 'short' "
+                        "(default 16). uhf_short is 14-15 throughout")
     g.add_argument("--snr-max", type=float, default=1e6,
                    help="above this is mostly instrumental. Tremblay+2026 use "
                         "100; these data have a detached population at 1e7-1e8, "
@@ -561,18 +636,23 @@ def main():
                         "NOT the 1 Hz they quote for their 1 Hz channels")
     g.add_argument("--tol-steps", type=int, default=1,
                    help="multi-beam drift-step tolerance (default 1)")
-    g.add_argument("--max-drift-coeff", type=float, default=MAX_DRIFT_COEFF,
+    g.add_argument("--max-drift-coeff", type=float, default=0.0,
                    help="max plausible |drift| in Hz/s per MHz of observing "
-                        "frequency (default %(default)g, reproducing all three "
-                        "anchor values of Tremblay+2026 sec 3.2). The "
-                        "coefficient is K2-18-specific -- see cut_max_drift()")
-    g.add_argument("--no-max-drift", dest="max_drift_coeff",
-                   action="store_const", const=0.0,
-                   help="disable the maximum drift-rate cut")
+                        "frequency. OFF by default -- ours is a blind survey "
+                        "of unknown systems, and Myburgh+2026 deliberately "
+                        "search +/-50 Hz/s for exactly that reason. Pass "
+                        f"{MAX_DRIFT_COEFF:g} to reproduce Tremblay+2026 sec "
+                        "3.2, whose coefficient is K2-18-specific. See "
+                        "cut_max_drift()")
     g.add_argument("--max-beams", type=int, default=4,
                    help="reject hits seen in more beams than this (default 4)")
     g.add_argument("--n-ants", type=int, default=62,
                    help="antennas, for the sqrt(N) coherence test (default 62)")
+    g.add_argument("--coh-ratio-tol", type=float, default=2.0,
+                   help="slack factor either side of sqrt(N) for the "
+                        "coherent/incoherent test (default 2). The test is "
+                        "two-sided: interference sits well below sqrt(N) as "
+                        "well as impossibly above it")
     g.add_argument("--min-obs", type=int, default=5,
                    help="reject frequencies seen in >= this many observations")
     g.add_argument("--repeat-tol-hz", type=float, default=10.0,
