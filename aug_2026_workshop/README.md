@@ -59,7 +59,7 @@ Two practical notes:
 
 Track A has already been re-run on the clean file, so
 `catalogues/lband_short_clean_cat.parquet` exists and feature extraction will
-not stop for it (928 survivors, 0.200% — see the Track A results table for why
+not stop for it (670 survivors, 0.145% — see the Track A results table for why
 that is not simply a subset of the original's 1,015).
 
 To re-run the pipeline on the corrected set:
@@ -104,12 +104,17 @@ bluse-track-a data/sband_short.h5 --incoherent-power incoh.csv
 
 Applied in order, following Tremblay et al. 2026 (K2-18b, VLA + MeerKAT):
 
-1. **Known-RFI frequency masks** — `rfi_masks.py`
-2. **Zero drift rate** — local RFI
-3. **SNR window** — below is mostly false positives, above is instrumental
-4. **Multi-beam coincidence** — ±1 Hz, ±1 drift step, per observation
-5. **Coherent/incoherent ratio** — `SNR_coh ≤ √N·SNR_incoh` *(wired up, inert until data arrives)*
-6. **Cross-epoch persistence** — same frequency across many observations
+1. **Known-RFI frequency masks** [§3.1] — `rfi_masks.py`
+2. **Zero drift rate** [§3.2] — local RFI
+3. **Maximum drift rate** [§3.2] — faster than a bound companion plausibly drifts
+4. **SNR window** [§3.3] — below is mostly false positives, above is instrumental
+5. **Multi-beam coincidence** [§3.4] — ±1 *fine channel*, ±1 drift step, per observation
+6. **Coherent/incoherent ratio** [§3.7] — `SNR_coh ≤ √N·SNR_incoh` *(wired up, inert until data arrives)*
+7. **Cross-epoch persistence** [§3.6] — same frequency **and drift** across many observations
+
+Their §3.5 transit filter has no analogue here: it needs a transit-timed planet.
+Full spec, our divergences and the paper's own internal inconsistencies are in
+[`papers/Tremblay-technical-reference.md`](../papers/Tremblay-technical-reference.md).
 
 **Nothing is deleted.** Each cut writes a boolean `flag_*` column; `pass_all` is
 the AND of their negations. Change your mind about any cut by re-filtering the
@@ -117,25 +122,64 @@ parquet — no need to re-run.
 
 ### Results with default parameters
 
-| File | Hits | Survivors | % |
-|---|---:|---:|---:|
-| `lband_long` | 557,690 | 853 | 0.153 |
-| `lband_short` | 866,002 | 1,015 | 0.117 |
-| `lband_short_clean` | 463,625 | 928 | 0.200 |
-| `uhf_long` | 299,878 | 2,406 | 0.802 |
-| `uhf_short` | 208,774 | 1,870 | 0.896 |
-| `sband_long` | 36,132 | 47 | 0.130 |
-| `sband_short` | 38,576 | 46 | 0.119 |
-| `mk_sample_hits` | 15,119 | 906 | 5.992 |
-| **total** | **2,022,171** | **7,143** | **0.353** |
+| File | Hits | Survivors | % | was |
+|---|---:|---:|---:|---:|
+| `lband_long` | 557,690 | 568 | 0.102 | 853 |
+| `lband_short_clean` | 463,625 | 670 | 0.145 | 928 |
+| `uhf_long` | 299,878 | 2,281 | 0.761 | 2,406 |
+| `uhf_short` | 208,774 | 1,193 | 0.571 | 1,870 |
+| `sband_long` | 36,132 | 43 | 0.119 | 47 |
+| `sband_short` | 38,576 | 43 | 0.111 | 46 |
+| `mk_sample_hits` | 15,119 | 894 | 5.913 | 906 |
+| **total** | **1,619,794** | **5,692** | **0.351** | **7,056** |
 
-The total is over the *original* seven files, so it still counts `lband_short`
-rather than `lband_short_clean`.
+The total is over the corrected set (`lband_short_clean`, not `lband_short`).
+The `was` column is the same set before the 2026-09 corrections below, so it is
+comparable row by row.
+
+### What changed in 2026-09, and why
+
+Re-reading Tremblay et al. 2026 against our code found three divergences. All
+three are now fixed; together they cost 19.3% of the survivors. See
+[`papers/Tremblay-technical-reference.md`](../papers/Tremblay-technical-reference.md)
+§6 for the full map.
+
+**1. The multi-beam tolerance was ±1 Hz; it should be ±1 fine channel.** This is
+the big one — it moves every file. §3.4 of the paper specifies one fine channel;
+the "1 Hz" they quote is a consequence of *their* 1 Hz channels. Ours are 1.013
+(UHF), 1.594 (L) and 1.630 (S) Hz, so in L and S band we were matching about 37%
+too tightly, under-counting how many beams carried each hit and letting
+multi-beam RFI through as survivors.
+
+**2. There was no maximum drift-rate cut.** We implemented §3.2's zero-drift
+rule but never its upper bound. It is not inert: it flags 12,756 hits in
+`lband_short_clean` (2.75%) and 1,134 in `uhf_short` (0.54%), and nothing
+anywhere else. The limit scales with observing frequency at 4.18e-4 Hz/s per
+MHz, which reproduces all three anchor values the paper quotes.
+
+*Caveat, recorded in the code:* that coefficient bounds Earth's rotation
+(~1.1e-4 Hz/s per MHz, universal) **plus K2-18b's own orbital acceleration**.
+Our targets are arbitrary Gaia sources, so treat it as a generous envelope
+rather than a per-target limit. `--no-max-drift` turns it off.
+
+**3. Cross-epoch persistence ignored drift rate.** §3.6 requires a signal to
+recur at the same frequency *and* the same drift to count as interference. Ours
+binned on frequency alone. The fix makes the cut strictly more conservative —
+on `uhf_long` it now removes 8 hits where it removed 136, and on `uhf_short` 6
+where it removed 121. `n_obs_at_freq` is unchanged and still frequency-only,
+because Track B's provenance columns are built on it; the drift-aware count is
+the new `n_obs_at_freq_drift`.
+
+**A fourth divergence is deliberate and stays.** Their SNR ceiling is 100; ours
+defaults to 1e6, because our data has a detached population at 1e7–1e8 that we
+want to see rather than silently drop. `--snr-max 100` gives the literal recipe,
+and `flag_snr_high` is recorded either way.
 
 **The clean file's survivors are not a subset of the original's.** Comparing by
-hit `id`: 922 survive in both, 93 survive only in the original — all 93 sat
-inside the corrupt block, so they never had a readable stamp and could not have
-reached Track B — and **6 survive only in the clean file**. Those 6 are new.
+hit `id` under the corrected parameters: 662 survive in both, 66 survive only in
+the original — every one of those 66 is a row the clean file deletes, so they
+never had a readable stamp and could not have reached Track B — and **8 survive
+only in the clean file**. Those 8 are new.
 The multi-beam coincidence cut counts how many beams a hit appears in, so
 deleting 46% of the rows changes the denominator and a handful of hits that
 previously looked like multi-beam RFI now look confined. Expect small

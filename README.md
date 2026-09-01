@@ -109,12 +109,12 @@ original's, are in
 ## What the pipeline does
 
 ```
-data/*.h5                      2,022,171 hits, 21 GB of stamp cubes
+data/*.h5                      1,619,794 hits, 21 GB of stamp cubes
     │
     │  bluse-track-a           metadata only — never touches the cubes, ~20 s
     ▼
-catalogues/*_cat.parquet       every hit + 7 boolean flag_* columns + pass_all
-    │                          7,143 survive all cuts (0.353%)
+catalogues/*_cat.parquet       every hit + 8 boolean flag_* columns + pass_all
+    │                          5,692 survive all cuts (0.351%)
     │
     │  bluse-features          streams the cubes, ~7 min
     ▼
@@ -122,26 +122,30 @@ features/*_features.parquet    1,611,678 rows × 16 features + weak labels
     │
     │  bluse-cluster           HDBSCAN, iterative batching
     ▼
-clusters/all_summary.csv       1,187 clusters over 1,281,826 hits
-clusters/all_interesting.csv   27 hits: clustered by nothing, ≤4 beams
+clusters/all_summary.csv       1,491 clusters over 1,281,791 hits
+clusters/all_interesting.csv   44 hits: clustered by nothing, ≤4 beams
 ```
 
 ### Track A — the classical chain
 
-Reproduces the standard filtering sequence (Tremblay et al. 2026, K2-18b with
-VLA + MeerKAT), reading metadata only:
+Reproduces the standard filtering sequence ([Tremblay et al.
+2026](papers/Tremblay-overview.md), K2-18b with VLA + MeerKAT), reading metadata
+only:
 
 1. **Known-RFI frequency masks** — SARAO's published table, plus ITU allocations
    we added and flagged as inference, plus optionally a mask derived from the
    data itself.
 2. **Zero drift rate** — a signal that does not Doppler-drift is not moving
    relative to the telescope, so it is local.
-3. **SNR window** — below is mostly false positives, above is instrumental.
-4. **Multi-beam coincidence** — the strongest discriminant available here.
+3. **Maximum drift rate** — nothing bound to a star drifts arbitrarily fast.
+   The bound scales with observing frequency.
+4. **SNR window** — below is mostly false positives, above is instrumental.
+5. **Multi-beam coincidence** — the strongest discriminant available here.
    A signal appearing in most of a 64-beam field is not on the sky.
-5. **Coherent/incoherent power ratio** — implemented, but inert: BLUSE never
-   measured `incoherentPower` for this data.
-6. **Cross-epoch persistence** — the same frequency turning up on many days.
+6. **Coherent/incoherent power ratio** — implemented, but inert: BLUSE never
+   measured `incoherentPower` for this data, which the paper's own Table 3
+   independently confirms.
+7. **Cross-epoch persistence** — the same frequency *and drift* on many days.
 
 **Nothing is deleted.** Each cut adds a boolean `flag_*` column and `pass_all`
 is the AND of their negations, so you can inspect what each cut caught on its
@@ -304,8 +308,9 @@ aug_2026_workshop/       the working record: results, findings, decisions
     clusters/            tracked cluster summaries
     data/               ← put the .h5 files here (gitignored, 21 GB)
 papers/                  reference literature + our summaries
-    GLOBULAR-*.md        the Track B method: overview (human) and
+    Tremblay-*.md        where Track A comes from: overview (human) and
                          technical reference (dense, maps onto our code)
+    GLOBULAR-*.md        the Track B method, same pair
 AGENTS.md                notes for agents working in this repo — including a
                          list of gotchas that cost real debugging time
 ```

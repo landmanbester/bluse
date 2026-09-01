@@ -21,14 +21,23 @@ Outputs per input file, into --outdir (default <workspace>/catalogues):
     <name>_cutflow.csv   the cut-flow table
     <name>_survivors.csv survivors only, human-readable, sorted by SNR
 
-The cuts, in order:
-    1. known-RFI frequency masks          (rfi_masks.py)
-    2. zero drift rate                    -> local RFI
-    3. SNR window                         -> below: false positives
-                                             above: instrumental artefacts
-    4. multi-beam spatial coincidence     -> field-wide == not on sky
-    5. coherent/incoherent power ratio    -> only if incoherentPower available
-    6. cross-epoch persistence            -> same freq+drift on many days
+The cuts, in order (Tremblay et al. 2026 section numbers in brackets):
+    1. known-RFI frequency masks          [3.1]  (rfi_masks.py)
+    2. zero drift rate                    [3.2]  -> local RFI
+    3. drift rate above the plausible max [3.2]  -> not a bound companion
+    4. SNR window                         [3.3]  -> below: false positives
+                                                    above: instrumental
+    5. multi-beam spatial coincidence     [3.4]  -> field-wide == not on sky
+    6. coherent/incoherent power ratio    [3.7]  -> only if incoherentPower
+    7. cross-epoch persistence            [3.6]  -> same freq+drift on many days
+
+Their [3.5] primary/secondary transit filter has no analogue here: it needs a
+transit-timed planet, and our targets are catalogued stars.
+
+See papers/Tremblay-technical-reference.md for the full specification, the
+places we diverge and why, and the inconsistencies inside the paper itself --
+in particular that its section 4 does not apply the drift limits its section
+3.2 prescribes.
 """
 
 from __future__ import annotations
@@ -56,6 +65,7 @@ STR_COLS = ["sourceName", "obsid"]
 FLAG_ORDER = [
     ("flag_rfi_band",   "known-RFI frequency mask"),
     ("flag_zero_drift", "drift rate exactly zero"),
+    ("flag_drift_high", "drift rate above plausible max"),
     ("flag_snr_low",    "SNR below window"),
     ("flag_snr_high",   "SNR above window (instrumental)"),
     ("flag_multibeam",  "multi-beam coincidence"),
@@ -112,6 +122,41 @@ def cut_zero_drift(df):
     return df
 
 
+# Hz/s per MHz. Tremblay et al. 2026 section 3.2 quotes three anchor points from
+# Li et al. (2022, 2023) covering 99% of plausible signals: ~0.4 Hz/s below
+# 1.5 GHz, 1.879 Hz/s at 4.5 GHz, 4.177 Hz/s at 10 GHz. Doppler drift scales
+# linearly with frequency, and indeed 0.4/1000, 1.879/4500 and 4.177/10000 all
+# land within 5% of 4.18e-4 -- so one coefficient reproduces all three numbers.
+MAX_DRIFT_COEFF = 4.18e-4
+
+
+def cut_max_drift(df, coeff):
+    """
+    Flag hits drifting faster than a bound companion plausibly could.
+
+    TWO HONEST CAVEATS, because this coefficient is easy to over-trust:
+
+    1. It is K2-18-specific. It bounds Earth's rotation -- about 1.1e-4 Hz/s per
+       MHz, and universal -- PLUS K2-18b's own orbital acceleration. Our targets
+       are arbitrary Gaia sources whose companions we know nothing about, so
+       read this as a generous envelope, not a per-target limit. Pass
+       --max-drift-coeff to change it or --no-max-drift to switch it off.
+
+    2. The paper does not apply its own prescription. Section 3.2 gives the
+       frequency-scaled limits above; section 4 then applies a blanket
+       +/-1.9 Hz/s -- the 4.5 GHz value -- to L, S and C band alike, and only
+       X band follows the rule. We follow 3.2, the version the text argues for.
+       See papers/Tremblay-technical-reference.md section 7.1.
+    """
+    if not coeff:
+        df["flag_drift_high"] = np.zeros(len(df), dtype=bool)
+        return df
+    limit = coeff * df["frequency"].to_numpy()          # frequency is MHz
+    df["max_drift_hz_s"] = limit
+    df["flag_drift_high"] = df["driftRate"].abs().to_numpy() > limit
+    return df
+
+
 def cut_snr_window(df, snr_min, snr_max):
     s = df["snr"].to_numpy()
     df["flag_snr_low"] = s < snr_min
@@ -128,7 +173,13 @@ def beam_multiplicity(freq_mhz, beam, drift_steps, tol_hz=1.0, tol_steps=1):
     For each hit, count the distinct beams carrying a matching hit.
 
     A match means |delta frequency| <= tol_hz AND |delta driftSteps| <= tol_steps,
-    following Tremblay et al. 2026 (MeerKAT: +/-1 Hz, +/-1 drift step).
+    following Tremblay et al. 2026 section 3.4.
+
+    THE RULE IS +/-1 FINE CHANNEL, NOT +/-1 Hz. They quote 1 Hz for MeerKAT
+    because their channel was 1 Hz; ours are 1.013 (UHF), 1.594 (L) and 1.630
+    (S). Hardcoding 1.0 matched ~37% too tightly in L and S band, under-counting
+    beam multiplicity and letting multi-beam RFI through. tol_hz now defaults to
+    the file's own |foff|; --tol-hz overrides it.
 
     A genuine sky signal is confined to one or a few coherent beams; local RFI
     illuminates the whole 64-beam field. With incoherentPower unavailable in
@@ -269,21 +320,46 @@ def apply_external_incoherent(df, path, verbose=True):
 # cut 6: cross-epoch persistence
 # ---------------------------------------------------------------------------
 
-def cut_repeat(df, tol_hz, min_obs):
+def cut_repeat(df, tol_hz, min_obs, tol_steps=1):
     """
-    Flag frequencies recurring across many separate observations.
+    Flag signals recurring at the same frequency AND drift across observations.
 
-    A transmitter on another world drifts differently on different days as the
-    geometry changes; a terrestrial or satellite emitter keeps turning up at the
-    same frequency. Binning on frequency alone is deliberately blunt -- we want
-    persistence, not an exact match.
+    Tremblay et al. 2026 section 3.6, after Li et al. (2022): a transmitter that
+    moves with its planet, observed from a rotating Earth, traces a sinusoid in
+    frequency, so it cannot reappear at an identical frequency and drift rate on
+    a different day. One that does is terrestrial.
+
+    ADAPTED, deliberately. They track a single target across a handful of epochs
+    and treat ANY repeat as RFI. We have 100-143 observations per file, where
+    "any repeat" would flag nearly everything, so we count how many distinct
+    observations a (frequency, drift) cell appears in and threshold at min_obs.
+    That threshold is ours, not theirs.
+
+    Two counts are recorded and they are not interchangeable:
+
+      n_obs_at_freq        frequency only. UNCHANGED -- Track B's provenance
+                           columns and weak labels are built on it.
+      n_obs_at_freq_drift  frequency AND drift, the faithful version. This is
+                           what flag_repeat now uses, so the cut is strictly
+                           more conservative than it was: a signal has to
+                           persist in *both* to be called interference.
     """
     f_hz = df["frequency"].to_numpy() * 1e6
-    binned = np.round(f_hz / tol_hz).astype(np.int64)
-    tmp = pd.DataFrame({"bin": binned, "obsid": df["obsid"].to_numpy()})
-    n_obs = tmp.groupby("bin")["obsid"].transform("nunique").to_numpy()
-    df["n_obs_at_freq"] = n_obs
-    df["flag_repeat"] = n_obs >= min_obs
+    fbin = np.round(f_hz / tol_hz).astype(np.int64)
+    obs = df["obsid"].to_numpy()
+
+    n_freq = pd.DataFrame({"bin": fbin, "obsid": obs}) \
+        .groupby("bin")["obsid"].transform("nunique").to_numpy()
+    df["n_obs_at_freq"] = n_freq
+
+    # Drift binned at the search's own resolution, mirroring the one-drift-step
+    # tolerance of section 3.4. driftSteps is already integer-valued.
+    dbin = np.round(df["driftSteps"].to_numpy() / max(tol_steps, 1)).astype(np.int64)
+    n_both = pd.DataFrame({"f": fbin, "d": dbin, "obsid": obs}) \
+        .groupby(["f", "d"])["obsid"].transform("nunique").to_numpy()
+    df["n_obs_at_freq_drift"] = n_both
+
+    df["flag_repeat"] = n_both >= min_obs
     return df
 
 
@@ -389,20 +465,38 @@ def process(path, args, mask_table):
                     args.mask_min_beams, args.mask_min_obs)
         mask_table = mask_table + load_empirical_mask(args.derive_mask)
 
+    # +/-1 fine channel, per Tremblay et al. 2026 section 3.4 -- so the default
+    # is the file's own channel width, not a constant. See cut_multibeam.
+    if args.tol_hz is not None:
+        tol_hz, tol_src = args.tol_hz, "--tol-hz"
+    elif "foff" in df.columns and len(df):
+        tol_hz, tol_src = abs(float(df["foff"].iloc[0])) * 1e6, "1 fine channel"
+    else:
+        tol_hz, tol_src = 1.0, "fallback"
+
     print("  [1] known-RFI frequency masks")
     df = cut_rfi_bands(df, mask_table)
     print("  [2] zero drift rate")
     df = cut_zero_drift(df)
-    print(f"  [3] SNR window [{args.snr_min}, {args.snr_max:g}]")
+    if args.max_drift_coeff:
+        lo = args.max_drift_coeff * df["frequency"].min()
+        hi = args.max_drift_coeff * df["frequency"].max()
+        print(f"  [3] max drift rate ({args.max_drift_coeff:g} Hz/s per MHz "
+              f"-> {lo:.3f}-{hi:.3f} Hz/s over this band)")
+    else:
+        print("  [3] max drift rate (disabled)")
+    df = cut_max_drift(df, args.max_drift_coeff)
+    print(f"  [4] SNR window [{args.snr_min}, {args.snr_max:g}]")
     df = cut_snr_window(df, args.snr_min, args.snr_max)
-    print(f"  [4] multi-beam coincidence "
-          f"(+/-{args.tol_hz:g} Hz, +/-{args.tol_steps} steps, "
+    print(f"  [5] multi-beam coincidence "
+          f"(+/-{tol_hz:g} Hz [{tol_src}], +/-{args.tol_steps} steps, "
           f"max {args.max_beams} beams)")
-    df = cut_multibeam(df, args.tol_hz, args.tol_steps, args.max_beams)
-    print("  [5] coherent/incoherent ratio")
+    df = cut_multibeam(df, tol_hz, args.tol_steps, args.max_beams)
+    print("  [6] coherent/incoherent ratio")
     df = cut_incoherent(df, args.n_ants)
-    print(f"  [6] cross-epoch persistence (>= {args.min_obs} observations)")
-    df = cut_repeat(df, args.repeat_tol_hz, args.min_obs)
+    print(f"  [7] cross-epoch persistence (>= {args.min_obs} observations "
+          f"at matching frequency AND drift)")
+    df = cut_repeat(df, args.repeat_tol_hz, args.min_obs, args.repeat_tol_steps)
 
     # derived quantities that every downstream track will want
     df["log_snr"] = np.log10(np.clip(df["snr"], 1e-12, None))
@@ -420,7 +514,7 @@ def process(path, args, mask_table):
     surv = df[df.pass_all].sort_values("snr", ascending=False)
     keep = ["row", "obsid", "sourceName", "beam", "frequency", "driftRate",
             "snr", "n_beams", "n_beams_formed", "beam_frac", "n_obs_at_freq",
-            "ra", "dec"]
+            "n_obs_at_freq_drift", "ra", "dec"]
     surv_path = os.path.join(args.outdir, f"{name}_survivors.csv")
     surv[keep].to_csv(surv_path, index=False)
 
@@ -460,10 +554,21 @@ def main():
                    help="above this is mostly instrumental. Tremblay+2026 use "
                         "100; these data have a detached population at 1e7-1e8, "
                         "so the default is deliberately loose (default 1e6)")
-    g.add_argument("--tol-hz", type=float, default=1.0,
-                   help="multi-beam frequency tolerance (default 1 Hz)")
+    g.add_argument("--tol-hz", type=float, default=None,
+                   help="multi-beam frequency tolerance. Default: the file's "
+                        "own fine-channel width (1.013-1.630 Hz here), which "
+                        "is the +/-1 fine channel of Tremblay+2026 sec 3.4 -- "
+                        "NOT the 1 Hz they quote for their 1 Hz channels")
     g.add_argument("--tol-steps", type=int, default=1,
                    help="multi-beam drift-step tolerance (default 1)")
+    g.add_argument("--max-drift-coeff", type=float, default=MAX_DRIFT_COEFF,
+                   help="max plausible |drift| in Hz/s per MHz of observing "
+                        "frequency (default %(default)g, reproducing all three "
+                        "anchor values of Tremblay+2026 sec 3.2). The "
+                        "coefficient is K2-18-specific -- see cut_max_drift()")
+    g.add_argument("--no-max-drift", dest="max_drift_coeff",
+                   action="store_const", const=0.0,
+                   help="disable the maximum drift-rate cut")
     g.add_argument("--max-beams", type=int, default=4,
                    help="reject hits seen in more beams than this (default 4)")
     g.add_argument("--n-ants", type=int, default=62,
@@ -471,7 +576,12 @@ def main():
     g.add_argument("--min-obs", type=int, default=5,
                    help="reject frequencies seen in >= this many observations")
     g.add_argument("--repeat-tol-hz", type=float, default=10.0,
-                   help="binning for the persistence test (default 10 Hz)")
+                   help="frequency binning for the persistence test "
+                        "(default 10 Hz)")
+    g.add_argument("--repeat-tol-steps", type=int, default=1,
+                   help="drift binning for the persistence test, in drift "
+                        "steps (default 1, mirroring sec 3.4). Tremblay+2026 "
+                        "sec 3.6 requires frequency AND drift to match")
 
     g = p.add_argument_group("masks")
     g.add_argument("--no-itu", action="store_true",

@@ -258,15 +258,16 @@ Ours: `src/bluse/features.py` (registry), `src/bluse/track_b_features.py` (extra
 
 Net: **our feature values are not numerically comparable to published GLOBULAR values.** Same constructions, different regime.
 
-### 12.2 Known divergences from the paper's spec
+### 12.2 Divergences from the paper's spec
 
-Checked against §2 and the table in §5 above. Three are worth knowing before quoting our features as "GLOBULAR's":
+Checked against §2 and the table in §5 above.
 
-1. **F9 normalisation differs.** Paper: *unit maximum, negatives permitted* — the sign of the temporal skew survives. Ours: `"unit"`, a min–max rescale to [0,1], which does not preserve sign. `f09_temporal_skew_n` is therefore not their Feature 9.
-2. **F12 gets a log we should not apply.** Paper's log list is {3,5,8,10,11,13}; F12 is unit-range only. Our `TRANSFORMS` has `f12_bandwidth_hz: "log-unit"`.
-3. **F7 is correlated over the wrong sub-range.** Paper computes the correlation over 200 Hz–2.7 kHz *within* a 200 Hz–100 kHz sweep. We correlate over the entire sweep. Arguably moot given our sweep is ~5–196 Hz throughout, but it is not the same statistic.
+1. **F9 was normalised to unit range, not unit maximum.** Paper: *unit maximum, negatives permitted* — temporal skew is signed and the paper keeps that sign deliberately. We had `"unit"`, a min–max rescale to [0,1], which discards it. **Fixed 2026-09**: a `unit-max` transform divides by the largest magnitude, so the scale is unity and the sign survives.
+2. **F12 was given a log the paper does not apply.** The paper's log list is {3,5,8,10,11,13}; F12 is unit-range only. **Fixed 2026-09**: `f12_bandwidth_hz` is now `"unit"`.
 
-None of these has been shown to change our conclusions, and none is fixed as of 2026-09. Fixing 1 and 2 is cheap; both would change cluster labels, so re-run and compare rather than assuming improvement.
+Both were re-run end to end; the effect on cluster counts is recorded in `aug_2026_workshop/README.md`.
+
+**A third suspected divergence turned out not to be one, and the correction is worth recording.** An earlier version of this document claimed F7's correlation ran over the wrong sub-range: the paper correlates over 200 Hz–2.7 kHz within a 200 Hz–100 kHz sweep, whereas we correlate over our entire sweep. The paper's own cross-reference settles it — "using the bandwidths between 200 Hz and 2.7 kHz **(see Feature 4)**" — and Feature 4's 2.7 kHz *is* their spectral window. So the rule is "correlate from the bottom of the sweep up to the spectral-window width", not "up to 2.7 kHz". Our spectral window is the whole stamp, which is also the whole sweep, so correlating over the full sweep is the faithful transfer. No change needed.
 
 ### 12.3 Where we match
 

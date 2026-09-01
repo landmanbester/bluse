@@ -437,9 +437,14 @@ def x03_channel_offset(df):
 # normalisation
 # ---------------------------------------------------------------------------
 
-# Per the GLOBULAR feature table. "quantile-uniform"/"quantile-normal" are
-# theirs; "log" then "unit" is their log-scale-and-normalise; "none" leaves a
-# naturally bounded feature alone.
+# Per the GLOBULAR feature table (Jacobson-Bell et al. 2025 sec 2), which
+# specifies: log for features {3,5,8,10,11,13}; unit range for {1,3,4,5,8,10,
+# 11,12,13}; unit variance for 2 after its quantile-normal transform; unit
+# MAXIMUM for 9, negatives permitted; nothing for 6 and 7.
+#
+# "quantile-uniform"/"quantile-normal" are theirs; "log-unit" is their
+# log-scale-then-normalise; "unit-max" preserves sign; "none" leaves a naturally
+# bounded feature alone.
 TRANSFORMS = {
     "f01_frequency":         "quantile-uniform",
     "f02_abs_drift":         "quantile-normal",
@@ -449,10 +454,14 @@ TRANSFORMS = {
     "f06_bimodality":        "none",
     "f07_kurt_bw_corr":      "none",
     "f08_turning_bw_hz":     "log-unit",
-    "f09_temporal_skew":     "unit",
+    # Unit MAXIMUM, not unit range: temporal skew is signed, and a min-max
+    # rescale to [0,1] throws that sign away. The paper keeps it deliberately
+    # ("normalized to unit maximum with negative values permitted").
+    "f09_temporal_skew":     "unit-max",
     "f10_timeseries_std":    "log-unit",
     "f11_spectrum_std":      "log-unit",
-    "f12_bandwidth_hz":      "log-unit",
+    # Unit range only -- f12 is NOT in the paper's log list.
+    "f12_bandwidth_hz":      "unit",
     "f13_redness":           "log-unit",
     "x01_drift_residual":    "log-unit",
     "x02_time_occupancy":    "none",
@@ -497,6 +506,12 @@ def normalise(df, columns=None, transforms=None, suffix="_n"):
                                      subsample=200_000, random_state=0)
             out[finite] = qt.fit_transform(x[finite].reshape(-1, 1)).ravel()
             state[col] = qt
+        elif how == "unit-max":
+            # Divide by the largest magnitude, so the scale is unity and the
+            # sign survives. Not min-max.
+            m = np.nanmax(np.abs(x[finite]))
+            out[finite] = x[finite] / m if m > EPS else 0.0
+            state[col] = m
         elif how == "none":
             out[finite] = x[finite]
         else:                                            # "unit", "log-unit"

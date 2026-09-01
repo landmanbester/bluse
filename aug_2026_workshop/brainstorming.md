@@ -8,7 +8,7 @@ This document surveys candidate techniques from the recent literature and propos
 
 ## 1. What we actually have (verified, not assumed)
 
-Seven HDF5 files, 21 GB, **2,022,171 hits total**. All share one columnar schema: 26 scalar-per-hit metadata columns plus a `data` cube of time-frequency cutouts. This is seticore "stamp" output flattened into a table — **the ideal input shape for everything discussed below**, because each row is simultaneously a feature vector *and* an image.
+Seven HDF5 files, 21 GB, **2,022,171 hits total** *(as surveyed when this was written; now 1,619,794 after `lband_short.h5` was superseded by `lband_short_clean.h5` — see the README)*. All share one columnar schema: 26 scalar-per-hit metadata columns plus a `data` cube of time-frequency cutouts. This is seticore "stamp" output flattened into a table — **the ideal input shape for everything discussed below**, because each row is simultaneously a feature vector *and* an image.
 
 | File | Hits | Stamp cube | Duration | Δf | Band | Obs | Sources |
 |---|---:|---|---:|---:|---|---:|---:|

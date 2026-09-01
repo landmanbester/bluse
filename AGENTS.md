@@ -27,6 +27,8 @@ papers/                          reference papers + our summaries
   Astronomaly-technical-reference.md   ... dense, plus BLUSE application guide
   GLOBULAR-overview.md           the Track B method, for humans
   GLOBULAR-technical-reference.md      ... dense, plus a map onto our code
+  Tremblay-overview.md           where Track A comes from, for humans
+  Tremblay-technical-reference.md      ... dense, plus a map onto our code
   *.pdf                          source papers (untracked -- see .gitignore)
 
 pyproject.toml                   installable package, uv_build backend
@@ -114,7 +116,8 @@ its `requirements.txt`.
 
 ## The data
 
-Seven HDF5 files, **2,022,171 hits**, 21 GB. Seticore "stamp" output flattened to
+Seven HDF5 files, **1,619,794 hits**, 21 GB (2,022,171 before `lband_short.h5`
+was superseded by `lband_short_clean.h5` -- gotcha 7). Seticore "stamp" output flattened to
 a columnar table: one row per narrowband detection, ~26 scalar metadata columns
 plus a `data` cube of time-frequency cutouts. Each row is therefore both a
 feature vector and an image.
@@ -178,9 +181,11 @@ across the whole delivery and stable between the HDF5 files and
    The consequence is that **the multi-beam coincidence denominator varies per
    observation**, so `n_beams` is not comparable across pointings. Catalogues
    carry `n_beams_formed` and `beam_frac` for that reason. We checked whether
-   the cut should use a fraction instead of an absolute count: it moves 7 hits
+   the cut should use a fraction instead of an absolute count: it moved 7 hits
    out of 7,143, all in the pre-filtered `mk_sample_hits`, so the absolute
-   threshold stands.
+   threshold stands. (Measured before the 2026-09 tolerance fix; the conclusion
+   is about redundancy between two formulations of the same cut, which that fix
+   does not touch.)
 
    `beam` is still a poor feature for an anomaly detector — beam index encodes
    target rank, not anything physical — but it is not the landmine it looked
@@ -191,7 +196,7 @@ across the whole delivery and stable between the HDF5 files and
    **8,116 of its 15,119 rows are byte-identical duplicates of rows in
    `lband_long.h5`** — same `id`, frequency, snr, drift and obsid. It is a
    curated sample carved out of `lband_long`, not an independent file. Our seven
-   files hold 2,022,171 rows but only **2,014,055 unique `id`s**.
+   files hold 1,619,794 rows but only **1,611,678 unique `id`s**.
 
    `track_b_features.py` deduplicates the combined `all_features.parquet` on
    `id`, keeping the copy from the larger file; per-file outputs are left alone.
@@ -288,12 +293,20 @@ across the whole delivery and stable between the HDF5 files and
 ## Where things stand
 
 **Done — Track A** (`track_a_filter.py`): classical baseline following Tremblay
-et al. 2026. Six cuts: RFI frequency masks, zero drift, SNR window, multi-beam
-coincidence (±1 Hz, ±1 drift step, per observation), coherent/incoherent ratio
-(inert), cross-epoch persistence. **2,022,171 → 7,143 survivors (0.353%)**, ~20 s
-for the whole dataset. Output in `catalogues/*_cat.parquet`, which carries all
-original metadata plus `n_beams`, `n_obs_at_freq`, `log_snr`, `log_power`,
-`abs_drift`, the flags, and `row` (index back into the HDF5 stamp cube).
+et al. 2026. Seven cuts: RFI frequency masks, zero drift, **max drift**, SNR
+window, multi-beam coincidence (**±1 fine channel**, ±1 drift step, per
+observation), coherent/incoherent ratio (inert), cross-epoch persistence
+(frequency **and** drift). **1,619,794 → 5,692 survivors (0.351%)**, ~20 s for
+the whole dataset. Output in `catalogues/*_cat.parquet`, which carries all
+original metadata plus `n_beams`, `n_obs_at_freq`, `n_obs_at_freq_drift`,
+`log_snr`, `log_power`, `abs_drift`, `max_drift_hz_s`, the flags, and `row`
+(index back into the HDF5 stamp cube).
+
+The bolded items are 2026-09 corrections found by reading the paper against the
+code; together they cost 19.3% of the survivors (7,056 → 5,692 on the same
+files). The multi-beam tolerance was the big one: the rule is ±1 *fine channel*
+and ours are 1.013–1.630 Hz, so a hardcoded 1.0 Hz matched ~37% too tightly in L
+and S band. See `papers/Tremblay-technical-reference.md` §6.
 
 **Done — Track B** (`features.py`, `track_b_features.py`, `track_b_cluster.py`):
 
@@ -309,10 +322,11 @@ original metadata plus `n_beams`, `n_obs_at_freq`, `log_snr`, `log_power`,
   their *minimum* sweep bandwidth. `f08_turning_bw_hz` is consequently
   unresolved for ~72% of hits (companion `f08_turning_bw_saturated` flag; the
   clusterer excludes it by default).
-- Extraction over all 2,022,171 hits took ~7 min; 1,612,171 had usable features
-  (the shortfall was the corruption in gotcha 7). **These numbers predate
-  `lband_short_clean.h5`** — swapping it in recovers ~404,000 of those stamps,
-  so re-extract rather than trusting them.
+- Extraction over all 1,619,794 hits takes ~7 min; `all_features.parquet` holds
+  1,611,678 rows after deduplication on `id`. Clustering the combined table
+  gives **1,491 clusters over 1,281,791 hits**, 87 noise, and **44 hits that are
+  unclustered and confined to ≤4 beams** — the actual output. Re-run 2026-09
+  after the Track A corrections above and the F9/F12 normalisation fixes.
 - Clustering follows GLOBULAR's iterative batching. **The batching is integral,
   not a memory workaround** — one large pass collapses to 2 clusters against 71
   batched on sband_short.
@@ -420,7 +434,11 @@ BLUSE team before redistributing any of it or making the repository public.
 ## Key references
 
 - Czech et al. 2026, BLUSE, arXiv:2607.23651 — the instrument
-- Tremblay et al. 2026, K2-18b VLA+MeerKAT, arXiv:2602.09553 — the filtering recipe
+- Tremblay et al. 2026, K2-18b VLA+MeerKAT, arXiv:2602.09553 — the Track A
+  recipe. Summaries in `papers/Tremblay-overview.md` and
+  `papers/Tremblay-technical-reference.md`. **Its section 4 does not apply the
+  drift limits its section 3.2 prescribes** — we follow 3.2; see §7.1 of the
+  technical reference before comparing cut-flows to its Table 3.
 - Jacobson-Bell et al. 2025, GLOBULAR clustering, AJ 169:206,
   doi:10.3847/1538-3881/adb8e7, arXiv:2411.16556 — Track B. Summaries in
   `papers/GLOBULAR-overview.md` and `papers/GLOBULAR-technical-reference.md`.
