@@ -2,16 +2,25 @@
 
 Finding interesting things in ~2M BLUSE narrowband hits.
 
-| File | What it is |
+**This directory is the working record — results, numbers, and what to
+distrust.** For installing the software and an overview of what the pipeline
+does, start at the [top-level README](../README.md). The code now lives in
+`src/bluse/` and is installed as commands (`bluse-track-a`, `bluse-features`,
+`bluse-cluster`, `bluse-bench`, `bluse-explore`); this directory is the
+*workspace* those commands read and write.
+
+| Path | What it is |
 |---|---|
 | `brainstorming.md` | Technique survey from the literature + proposed tracks A–E |
-| `explore.py` | Visual exploration of the raw HDF5 (stamps, metadata, coincidence) |
-| `rfi_masks.py` | Known-RFI frequency masks for MeerKAT, with provenance labels |
-| `track_a_filter.py` | **Track A** — the classical post-processing baseline |
 | `data/` | The HDF5 stamp files (21 GB) — see "Which data files to use" |
 | `catalogues/` | Track A output: filtered catalogues + cut-flows |
-| `plots/` | PNGs from `explore.py` |
+| `features/` | Track B feature matrices |
+| `clusters/` | Track B cluster tables and plots |
+| `plots/` | PNGs from `bluse-explore` |
 | `masks/` | Empirically derived RFI masks |
+
+Run the commands from this directory (or any directory under it) and the
+workspace resolves here automatically.
 
 ## Which data files to use
 
@@ -57,42 +66,38 @@ To re-run the pipeline on the corrected set:
 
 ```bash
 mkdir -p data/superseded && mv data/lband_short.h5 data/superseded/
-python track_b_features.py                 # now picks up *_clean.h5 only
-python track_b_cluster.py                  # all_features.parquet
+bluse-features                             # now picks up *_clean.h5 only
+bluse-cluster                              # all_features.parquet
 ```
 
 ## Setup
 
-Either use `uv` (scripts carry inline dependency metadata):
+See the [top-level README](../README.md#install). In short, from the repository
+root:
 
 ```bash
-uv run explore.py info
-uv run track_a_filter.py
-```
-
-...or the venv already built here:
-
-```bash
-.venv/bin/python explore.py info
+uv sync --extra all
+source .venv/bin/activate
+cd aug_2026_workshop
 ```
 
 ## Track A: the classical baseline
 
 ```bash
 # everything, default parameters, ~20 s for all 2M hits
-python track_a_filter.py
+bluse-track-a
 
 # one file, look at more survivors
-python track_a_filter.py data/sband_short.h5 --show 40
+bluse-track-a data/sband_short.h5 --show 40
 
 # documented SARAO masks only -- drop our ITU-allocation guesses
-python track_a_filter.py data/sband_short.h5 --no-itu
+bluse-track-a data/sband_short.h5 --no-itu
 
 # derive an RFI mask from the data instead of trusting published tables
-python track_a_filter.py data/uhf_short.h5 --derive-mask masks/uhf.csv
+bluse-track-a data/uhf_short.h5 --derive-mask masks/uhf.csv
 
 # when the real incoherent-beam powers turn up
-python track_a_filter.py data/sband_short.h5 --incoherent-power incoh.csv
+bluse-track-a data/sband_short.h5 --incoherent-power incoh.csv
 ```
 
 ### The cuts
@@ -183,15 +188,15 @@ on `id`; anything else that pools files must do the same.
   remain unreadable, so ~6,000 stamps are still lost there. Worth asking for a
   re-copy of that one too, on the same terms as `lband_short_clean.h5`.
 - **Hits-per-beam steps at beams ~49/~55 — explained, benign.** One beam per
-  target, filled from 0, and sparse sky has fewer targets. `python explore.py
+  target, filled from 0, and sparse sky has fewer targets. `bluse-explore
   beams <file>` shows it. Catalogues now carry `n_beams_formed` and `beam_frac`
   because the coincidence denominator varies per observation.
 
 ## Cluster Bench — interactive hyperparameter explorer
 
 ```bash
-python explorer/app.py            # then open http://127.0.0.1:8000
-python explorer/app.py --port 8080 --host 0.0.0.0   # share on the LAN
+bluse-bench                       # then open http://127.0.0.1:8000
+bluse-bench --port 8080 --host 0.0.0.0   # share on the LAN
 ```
 
 FastAPI + htmx + a canvas scatter. Pick a file, toggle features, adjust

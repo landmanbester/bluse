@@ -2,8 +2,11 @@
 """
 Cluster Bench -- interactive HDBSCAN exploration for the BLUSE feature matrix.
 
-    uv run explorer/app.py            # then open http://127.0.0.1:8000
-    .venv/bin/python explorer/app.py --port 8080
+    bluse-bench                       # then open http://127.0.0.1:8000
+    bluse-bench --port 8080 --host 0.0.0.0
+
+Reads <workspace>/features/*_features.parquet, so run `bluse-features` first.
+Stamp thumbnails come from <workspace>/data/<file>.h5.
 
 Why this exists: the Track B defaults cluster badly, and the reason is not
 obvious from a static run. Feature scaling turned out to matter more than any
@@ -28,7 +31,6 @@ import hashlib
 import io
 import json
 import os
-import sys
 import time
 from dataclasses import dataclass, field
 
@@ -42,13 +44,13 @@ from fastapi.templating import Jinja2Templates
 from sklearn.cluster import HDBSCAN
 from sklearn.decomposition import PCA
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-sys.path.insert(0, ROOT)
-import features as F  # noqa: E402
+from .. import features as F
+from .. import paths
 
-FEAT_DIR = os.path.join(ROOT, "features")
-DATA_DIR = os.path.join(ROOT, "data")
+# Static assets and templates ship inside the wheel, so they -- and only they --
+# are still located relative to this file. Everything the user supplies (feature
+# matrices, stamp cubes) resolves against the workspace instead.
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 app = FastAPI(title="Cluster Bench")
 app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
@@ -119,13 +121,14 @@ HISTORY: list[str] = []
 
 
 def available_files():
-    if not os.path.isdir(FEAT_DIR):
+    feat = paths.features_dir()
+    if not os.path.isdir(feat):
         return []
     out = []
-    for f in sorted(os.listdir(FEAT_DIR)):
+    for f in sorted(os.listdir(feat)):
         if f.endswith("_features.parquet") and not f.startswith("all_"):
             out.append(f.replace("_features.parquet", ""))
-    if os.path.exists(os.path.join(FEAT_DIR, "all_features.parquet")):
+    if os.path.exists(os.path.join(feat, "all_features.parquet")):
         out.append("all")
     return out
 
@@ -146,7 +149,7 @@ def load_dataset(name, sample, seed):
     if key in DATASETS:
         return DATASETS[key]
 
-    path = os.path.join(FEAT_DIR, f"{name}_features.parquet")
+    path = os.path.join(paths.features_dir(), f"{name}_features.parquet")
     df = pd.read_parquet(path)
     df = df[df.feature_ok].reset_index(drop=True)
     cols = feature_columns(df)
@@ -350,7 +353,7 @@ def pick_dataset(request: Request, file: str = Form(...),
     except FileNotFoundError:
         return HTMLResponse(
             f'<p class="error">No feature file for {file}. '
-            f'Run <code>python track_b_features.py</code> first.</p>')
+            f'Run <code>bluse-features</code> first.</p>')
 
     # Raw spread only. The rail used to compute a scaled IQR here, never use
     # it, and caption the raw bars "after scaling" -- which is false in the
@@ -523,7 +526,7 @@ def stamp(file: str, row: int):
     import matplotlib.pyplot as plt
     from matplotlib.colors import LogNorm
 
-    path = os.path.join(DATA_DIR, f"{file}.h5")
+    path = os.path.join(paths.data_dir(), f"{file}.h5")
     try:
         with h5py.File(path, "r") as h:
             cube = h["data"][row]
@@ -553,13 +556,35 @@ def stamp(file: str, row: int):
     return Response(buf.getvalue(), media_type="image/png")
 
 
-if __name__ == "__main__":
+def main():
     import uvicorn
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Cluster Bench")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--reload", action="store_true")
+    ap.add_argument("--reload", action="store_true",
+                    help="restart on source edits (development only)")
+    paths.add_workspace_arg(ap)
     a = ap.parse_args()
-    print(f"\n  Cluster Bench -> http://{a.host}:{a.port}\n")
-    uvicorn.run("app:app" if a.reload else app, host=a.host, port=a.port,
-                reload=a.reload, app_dir=HERE)
+    paths.set_workspace(a.workspace)
+
+    found = available_files()
+    say = lambda m: print(m, flush=True)
+    say(f"\n  {paths.banner()}")
+    if found:
+        say(f"  datasets: {', '.join(found)}")
+    else:
+        say(f"  NO feature matrices in {paths.features_dir()} -- "
+            f"run bluse-features first")
+    say(f"\n  Cluster Bench -> http://{a.host}:{a.port}\n")
+
+    # --reload needs an import string, and uvicorn re-imports it in a fresh
+    # process that inherits none of our argparse state -- so the workspace has
+    # to travel via the environment or the child resolves it from its own cwd.
+    if a.reload:
+        os.environ[paths.ENV_VAR] = paths.workspace()
+    uvicorn.run("bluse.bench.app:app" if a.reload else app,
+                host=a.host, port=a.port, reload=a.reload)
+
+
+if __name__ == "__main__":
+    main()

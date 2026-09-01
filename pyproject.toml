@@ -1,0 +1,55 @@
+[project]
+name = "bluse"
+version = "0.1.0"
+description = "Technosignature post-processing for BLUSE/MeerKAT narrowband hits"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Landman Bester" }]
+keywords = ["seti", "technosignature", "radio-astronomy", "meerkat", "breakthrough-listen"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+
+# Pinned only where a floor is load-bearing:
+#   scikit-learn 1.3 is the first release to ship sklearn.cluster.HDBSCAN, which
+#   the whole of Track B is built on.
+dependencies = [
+    "h5py>=3.8",
+    "matplotlib>=3.7",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyarrow>=12.0",
+    "scikit-learn>=1.3",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+# Cluster Bench, the interactive explorer.
+bench = [
+    "fastapi>=0.110",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.27",
+]
+# UMAP embeddings in Cluster Bench. Optional because it drags in numba/llvmlite,
+# which is a heavy install for a feature that falls back to PCA if absent.
+umap = ["umap-learn>=0.5.5"]
+all = ["bluse[bench,umap]"]
+
+[project.scripts]
+bluse-explore  = "bluse.explore:main"
+bluse-track-a  = "bluse.track_a_filter:main"
+bluse-features = "bluse.track_b_features:main"
+bluse-cluster  = "bluse.track_b_cluster:main"
+bluse-bench    = "bluse.bench.app:main"
+
+[build-system]
+requires = ["uv_build>=0.9.0,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "bluse"
+module-root = "src"

@@ -27,25 +27,56 @@ papers/                          reference papers + our summaries
   Astronomaly-technical-reference.md   ... dense, plus BLUSE application guide
   *.pdf                          source papers (untracked -- see .gitignore)
 
-aug_2026_workshop/
-  README.md                      workflow, Track A results, open decisions
-  brainstorming.md               technique survey + Tracks A-E plan
+pyproject.toml                   installable package, uv_build backend
+uv.lock                          pinned resolution -- commit changes to it
+.venv/                           project env, `uv sync --extra all` (untracked)
+
+src/bluse/                       THE CODE. Installed; importable as `bluse`.
+  paths.py                       workspace resolution (see below)
   explore.py                     visual exploration of the raw HDF5
   rfi_masks.py                   MeerKAT RFI masks, provenance-tagged
   track_a_filter.py              Track A: classical filtering baseline
   features.py                    Track B: extensible feature registry
   track_b_features.py            Track B: feature extraction driver
   track_b_cluster.py             Track B: HDBSCAN clustering
-  explorer/                      Cluster Bench: FastAPI + htmx tuning UI
+  bench/                         Cluster Bench: FastAPI + htmx tuning UI
+                                 (static/ and templates/ ship in the wheel)
+
+aug_2026_workshop/               THE WORKSPACE. Data in, results out.
+  README.md                      workflow, Track A results, open decisions
+  brainstorming.md               technique survey + Tracks A-E plan
   data/                          HDF5 files + filtered_hits.csv (untracked).
                                  Prefer *_clean.h5 -- see gotcha 7.
   catalogues/                    Track A output (.csv tracked, .parquet not)
   features/                      Track B feature matrices (untracked, ~350 MB)
   clusters/                      Track B clustering output
   masks/                         empirically derived RFI masks
-  plots/                         PNGs from explore.py (untracked)
-  .venv/                         python 3.11 env (untracked)
+  plots/                         PNGs from bluse-explore (untracked)
 ```
+
+**Code and workspace are separate, and that separation is load-bearing.**
+Nothing under `src/bluse/` may resolve a data path from `__file__` -- the
+package is installed, so `__file__` points into `.venv` or site-packages, not at
+anyone's data. Use `bluse.paths`:
+
+```python
+from . import paths
+paths.data_dir()            # <workspace>/data
+paths.catalogues_dir()      # etc: features_dir, clusters_dir, plots_dir
+paths.subdir("x", create=True)
+paths.resolve_files(argv)   # bare names resolve against data/
+```
+
+The workspace is `--workspace DIR`, else `$BLUSE_ROOT`, else the nearest
+directory at or above the cwd holding a `data/` -- bounded by the enclosing
+project (`.git` / `pyproject.toml`) and by `$HOME`, because an unbounded search
+climbs out of the checkout and silently adopts an unrelated `~/data`. Every CLI
+prints the workspace it resolved; if a run writes somewhere surprising, that
+line is the first thing to read.
+
+New CLI flags go through `paths.add_workspace_arg(p)`, and any `--outdir`
+default must be `None` and be filled in *after* `parse_args` (argparse defaults
+are evaluated at import, before `--workspace` has been seen).
 
 **Read `papers/BLUSE-technical-reference.md` before touching the data.** It
 explains what a "hit", a "stamp", a coherent beam and a drift rate are, and the
@@ -53,16 +84,26 @@ instrument that produced them.
 
 ## Environment
 
-No project-wide Python. Use the workshop venv or `uv` (scripts carry PEP-723
-inline dependency metadata):
+The project installs. From the repository root:
 
 ```bash
-cd aug_2026_workshop
-.venv/bin/python explore.py info        # or:  uv run explore.py info
+uv sync --extra all          # .venv/ with bench + umap extras
+source .venv/bin/activate
+cd aug_2026_workshop         # the workspace
+bluse-explore info
 ```
 
-System Python is 3.14 and has no scientific stack. Do not use it. The venv has
-h5py, numpy, pandas, pyarrow, matplotlib on Python 3.11.
+Five console scripts: `bluse-explore`, `bluse-track-a`, `bluse-features`,
+`bluse-cluster`, `bluse-bench`. There are no runnable scripts any more -- the
+PEP-723 inline metadata blocks are gone, `uv run explore.py` will not work, and
+neither will `python track_a_filter.py`, because the modules use relative
+imports.
+
+For a one-off without touching the env, `uv run bluse-track-a ...` works from
+the repository root.
+
+System Python is 3.14 and has no scientific stack. Do not use it. The project
+env is Python 3.11.
 
 Astronomaly is cloned at `~/software/astronomaly` (v2.0) but is **not installed**
 and needs its own environment — its pinned stack will not build on 3.14. BYOL
@@ -130,7 +171,7 @@ across the whole delivery and stable between the HDF5 files and
    `sband_short`: beam↔`sourceName` is 1:1 in 30/30 observations, indices are
    contiguous from 0 in 28/30, and beams formed falls monotonically with
    galactic latitude (64 beams at |b|≈11°, 20 at |b|≈65°) — sparse sky simply
-   has fewer targets. Run `python explore.py beams <file>` to see it.
+   has fewer targets. Run `bluse-explore beams <file>` to see it.
 
    The consequence is that **the multi-beam coincidence denominator varies per
    observation**, so `n_beams` is not comparable across pointings. Catalogues

@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["numpy", "pandas", "pyarrow", "scikit-learn", "matplotlib", "h5py"]
-# ///
 """
 track_b_cluster.py -- HDBSCAN over the Track B features, to name the RFI.
 
@@ -11,10 +7,10 @@ of interference present in the data, so that "here are 200 unexplained hits"
 replaces "here are some outliers". Brzycki et al. 2025 identified ~59 distinct
 RFI clusters this way and cut false positives by 93.1%.
 
-    uv run track_b_cluster.py                              # all_features.parquet
-    uv run track_b_cluster.py --file sband_short
-    uv run track_b_cluster.py --epochs 6 --batch 3000      # GLOBULAR's scheme
-    uv run track_b_cluster.py --min-cluster-size 10
+    bluse-cluster                                          # all_features.parquet
+    bluse-cluster --file sband_short
+    bluse-cluster --epochs 6 --batch 3000                  # GLOBULAR's scheme
+    bluse-cluster --min-cluster-size 10
 
 Two modes:
 
@@ -93,11 +89,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import features as F  # noqa: E402
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-FEAT_DIR = os.path.join(HERE, "features")
+from . import features as F
+from . import paths
 
 
 def feature_matrix(df, columns=None, drop_saturated=True, scaling="robust"):
@@ -348,8 +341,10 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--file", help="basename, e.g. sband_short. Default: all")
-    p.add_argument("--featdir", default=FEAT_DIR)
-    p.add_argument("--outdir", default=os.path.join(HERE, "clusters"))
+    p.add_argument("--featdir", default=None,
+                   help="default: <workspace>/features")
+    p.add_argument("--outdir", default=None,
+                   help="default: <workspace>/clusters")
     p.add_argument("--mode", choices=["epochs", "single"], default="epochs",
                    help="epochs is the default: GLOBULAR's hyperparameters "
                         "are tuned for ~3000-point batches and degrade badly "
@@ -374,13 +369,18 @@ def main():
                         "Euclidean distance. 'none' is GLOBULAR's literal spec "
                         "and clusters poorly here -- see feature_matrix()")
     p.add_argument("--seed", type=int, default=0)
+    paths.add_workspace_arg(p)
     args = p.parse_args()
+    paths.set_workspace(args.workspace)
+    args.featdir = args.featdir or paths.features_dir()
+    args.outdir = args.outdir or paths.clusters_dir()
+    print(paths.banner())
 
     src = os.path.join(args.featdir,
                        f"{args.file}_features.parquet" if args.file
                        else "all_features.parquet")
     if not os.path.exists(src):
-        sys.exit(f"Missing {src}\nRun:  python track_b_features.py")
+        sys.exit(f"Missing {src}\nRun:  bluse-features")
     df = pd.read_parquet(src)
     df = df[df.feature_ok].reset_index(drop=True)
     tag = args.file or "all"

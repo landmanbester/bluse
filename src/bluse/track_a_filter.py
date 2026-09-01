@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["h5py", "numpy", "pandas", "pyarrow", "matplotlib"]
-# ///
 """
 track_a_filter.py -- the classical post-processing baseline for BLUSE hits.
 
@@ -15,12 +11,12 @@ DESIGN: nothing is deleted. Each cut adds a boolean `flag_*` column and the
 final `pass_all` is the AND of their negations. That way you can inspect what
 each cut did, disagree with any of it, and re-decide without re-running.
 
-    uv run track_a_filter.py data/sband_short.h5
-    uv run track_a_filter.py data/*.h5 --outdir catalogues
-    uv run track_a_filter.py data/sband_short.h5 --derive-mask masks/sband.csv
-    uv run track_a_filter.py data/sband_short.h5 --incoherent-power incoh.csv
+    bluse-track-a                                   # every file in data/
+    bluse-track-a data/sband_short.h5
+    bluse-track-a data/sband_short.h5 --derive-mask masks/sband.csv
+    bluse-track-a data/sband_short.h5 --incoherent-power incoh.csv
 
-Outputs per input file, into --outdir (default ./catalogues):
+Outputs per input file, into --outdir (default <workspace>/catalogues):
     <name>_cat.parquet   full catalogue: metadata + flags + diagnostics
     <name>_cutflow.csv   the cut-flow table
     <name>_survivors.csv survivors only, human-readable, sorted by SNR
@@ -41,17 +37,14 @@ import argparse
 import os
 import sys
 import time
-from glob import glob
 
 import h5py
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfi_masks import build_mask_table, load_empirical_mask  # noqa: E402
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(HERE, "data")
+from . import paths
+from .paths import resolve_files
+from .rfi_masks import build_mask_table, load_empirical_mask
 
 META_COLS = [
     "id", "index", "beam", "coarseChannel", "startChannel", "numChannels",
@@ -74,25 +67,6 @@ FLAG_ORDER = [
 # ---------------------------------------------------------------------------
 # loading
 # ---------------------------------------------------------------------------
-
-def resolve_files(paths):
-    if not paths:
-        found = sorted(glob(os.path.join(DATA_DIR, "*.h5")))
-        if not found:
-            sys.exit(f"No .h5 files in {DATA_DIR}")
-        return found
-    out = []
-    for p in paths:
-        if os.path.isdir(p):
-            out.extend(sorted(glob(os.path.join(p, "*.h5"))))
-        elif os.path.exists(p):
-            out.append(p)
-        elif os.path.exists(os.path.join(DATA_DIR, p)):
-            out.append(os.path.join(DATA_DIR, p))
-        else:
-            sys.exit(f"Not found: {p}")
-    return out
-
 
 def load_catalogue(path) -> pd.DataFrame:
     """Read every scalar metadata column into a DataFrame. Stamps untouched."""
@@ -462,7 +436,7 @@ def process(path, args, mask_table):
                   f"{int(r['beam']):>5} {int(r['n_beams']):>4} "
                   f"{r['sourceName']}")
         print(f"\n  inspect them with:")
-        print(f"    python explore.py stamps {path} --sort snr")
+        print(f"    bluse-explore stamps {path} --sort snr")
     else:
         print("\n  no survivors.")
     print(f"\n  ({time.time() - t0:.1f}s total)")
@@ -474,7 +448,9 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("files", nargs="*", help="HDF5 files (default: all in data/)")
-    p.add_argument("--outdir", default=os.path.join(HERE, "catalogues"))
+    p.add_argument("--outdir", default=None,
+                   help="default: <workspace>/catalogues")
+    paths.add_workspace_arg(p)
     p.add_argument("--show", type=int, default=15, help="survivors to print")
 
     g = p.add_argument_group("cut parameters")
@@ -515,6 +491,9 @@ def main():
                    help="CSV/parquet with incoherentPower plus a join key")
 
     args = p.parse_args()
+    paths.set_workspace(args.workspace)
+    args.outdir = args.outdir or paths.catalogues_dir()
+    print(paths.banner())
     mask_table = build_mask_table(include_itu=not args.no_itu,
                                   include_dtv=args.dtv)
     print(f"{len(mask_table)} RFI mask ranges loaded")

@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["h5py", "numpy", "matplotlib"]
-# ///
 """
 explore.py -- visual exploration of the BLUSE workshop HDF5 stamp files.
 
@@ -10,19 +6,16 @@ The data are seticore "stamp" files flattened into a columnar HDF5 layout: one
 row per narrowband hit, with N scalar metadata columns plus a `data` cube of
 per-hit time-frequency cutouts (the waterfall around the detection).
 
-Run with uv (no environment setup needed):
+    bluse-explore info
+    bluse-explore meta   data/sband_short.h5
+    bluse-explore stamps data/sband_short.h5 --sort snr --n 24
+    bluse-explore obs    data/sband_short.h5
+    bluse-explore coincidence data/sband_short.h5
 
-    uv run explore.py info
-    uv run explore.py meta   data/sband_short.h5
-    uv run explore.py stamps data/sband_short.h5 --sort snr --n 24
-    uv run explore.py obs    data/sband_short.h5
-    uv run explore.py coincidence data/sband_short.h5
-
-...or with an interpreter that already has h5py/numpy/matplotlib:
-
-    .venv/bin/python explore.py info
-
-Every plotting command writes a PNG into ./plots/ and prints the path.
+File arguments resolve against the workspace data directory, so a bare
+`sband_short.h5` works from anywhere. Every plotting command writes a PNG into
+<workspace>/plots/ and prints the path. See `bluse.paths` for how the workspace
+is located.
 """
 
 from __future__ import annotations
@@ -30,7 +23,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from glob import glob
 
 import h5py
 import numpy as np
@@ -40,9 +32,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(HERE, "data")
-PLOT_DIR = os.path.join(HERE, "plots")
+from . import paths
+from .paths import resolve_files
 
 # Columns that are one scalar per hit. `data` and `tstartts` are handled apart:
 # `data` is the stamp cube, `tstartts` is a nested compound type.
@@ -61,26 +52,6 @@ PAD_VALUE = -1.0  # stamps are right-aligned in a 120-channel buffer; the unused
 # ----------------------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------------------
-
-def resolve_files(paths):
-    """Expand user-given paths, or default to every .h5 in ./data."""
-    if not paths:
-        found = sorted(glob(os.path.join(DATA_DIR, "*.h5")))
-        if not found:
-            sys.exit(f"No .h5 files found in {DATA_DIR}. Pass paths explicitly.")
-        return found
-    out = []
-    for p in paths:
-        if os.path.isdir(p):
-            out.extend(sorted(glob(os.path.join(p, "*.h5"))))
-        elif os.path.exists(p):
-            out.append(p)
-        elif os.path.exists(os.path.join(DATA_DIR, p)):
-            out.append(os.path.join(DATA_DIR, p))
-        else:
-            sys.exit(f"Not found: {p}")
-    return out
-
 
 def decode(arr):
     """h5py object-dtype string column -> numpy array of str."""
@@ -120,13 +91,11 @@ def norm_stamp(img):
 
 
 def ensure_plot_dir():
-    os.makedirs(PLOT_DIR, exist_ok=True)
-    return PLOT_DIR
+    return paths.subdir("plots", create=True)
 
 
 def savefig(fig, name):
-    ensure_plot_dir()
-    path = os.path.join(PLOT_DIR, name)
+    path = os.path.join(ensure_plot_dir(), name)
     fig.savefig(path, dpi=130, bbox_inches="tight")
     plt.close(fig)
     print(f"  wrote {path}")
@@ -574,7 +543,10 @@ def main():
     s.add_argument("--max-beams", type=int, default=4)
     s.set_defaults(func=cmd_coincidence)
 
+    paths.add_workspace_arg(p)
+
     args = p.parse_args()
+    paths.set_workspace(args.workspace)
     args.func(args)
 
 

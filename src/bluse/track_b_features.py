@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["h5py", "numpy", "pandas", "pyarrow", "scipy", "scikit-learn"]
-# ///
 """
 track_b_features.py -- extract the Track B feature matrix.
 
@@ -10,10 +6,10 @@ Reads the Track A catalogue for provenance and flags, streams the stamp cubes,
 runs every registered feature in `features.py`, and writes a single parquet per
 input file that Track E can train on directly.
 
-    uv run track_b_features.py                       # all files
-    uv run track_b_features.py data/sband_short.h5
-    uv run track_b_features.py --sample 50000        # per-file subsample
-    uv run track_b_features.py --list                # show the registry
+    bluse-features                                   # all files
+    bluse-features data/sband_short.h5
+    bluse-features --sample 50000                    # per-file subsample
+    bluse-features --list                            # show the registry
 
 OUTPUT -- designed for Track E
 ------------------------------
@@ -67,12 +63,9 @@ import h5py
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import features as F  # noqa: E402
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(HERE, "data")
-CAT_DIR = os.path.join(HERE, "catalogues")
+from . import features as F
+from . import paths
+from .paths import resolve_files
 
 PROVENANCE = [
     "id", "row", "obsid", "sourceName", "beam", "frequency", "driftRate", "snr",
@@ -81,30 +74,11 @@ PROVENANCE = [
 ]
 
 
-def resolve_files(paths):
-    if not paths:
-        found = sorted(glob(os.path.join(DATA_DIR, "*.h5")))
-        if not found:
-            sys.exit(f"No .h5 files in {DATA_DIR}")
-        return found
-    out = []
-    for p in paths:
-        if os.path.isdir(p):
-            out.extend(sorted(glob(os.path.join(p, "*.h5"))))
-        elif os.path.exists(p):
-            out.append(p)
-        elif os.path.exists(os.path.join(DATA_DIR, p)):
-            out.append(os.path.join(DATA_DIR, p))
-        else:
-            sys.exit(f"Not found: {p}")
-    return out
-
-
 def load_track_a(name):
     """Track A gives us the flags, n_beams and beam_frac. It is a prerequisite."""
-    p = os.path.join(CAT_DIR, f"{name}_cat.parquet")
+    p = os.path.join(paths.catalogues_dir(), f"{name}_cat.parquet")
     if not os.path.exists(p):
-        sys.exit(f"Missing {p}\nRun:  python track_a_filter.py data/{name}.h5")
+        sys.exit(f"Missing {p}\nRun:  bluse-track-a data/{name}.h5")
     return pd.read_parquet(p)
 
 
@@ -422,7 +396,8 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("files", nargs="*")
-    p.add_argument("--outdir", default=os.path.join(HERE, "features"))
+    p.add_argument("--outdir", default=None,
+                   help="default: <workspace>/features")
     p.add_argument("--batch", type=int, default=4096)
     p.add_argument("--sample", type=int, help="subsample each file")
     p.add_argument("--seed", type=int, default=0)
@@ -448,11 +423,16 @@ def main():
                    help="rebuild all_features.parquet from the per-file "
                         "parquets already in --outdir, without re-extracting")
     p.add_argument("--list", action="store_true", help="print the registry and exit")
+    paths.add_workspace_arg(p)
     args = p.parse_args()
 
     if args.list:
         F.describe()
         return
+
+    paths.set_workspace(args.workspace)
+    args.outdir = args.outdir or paths.features_dir()
+    print(paths.banner())
 
     if args.combine_only:
         parts = sorted(glob(os.path.join(args.outdir, "*_features.parquet")))
