@@ -71,7 +71,8 @@ They win on different axes, so neither is a default waiting to be tuned.
 | minority-class enrichment | **12.33%** | 1.19% |
 | AMI | 0.0048 | 0.0026 |
 
-`leaf` wins coherence 8.8×; `eom` plus matching wins reproducibility 4.8×.
+`leaf` wins coherence 8.8×; `eom` plus matching wins reproducibility 4.8× —
+**but both of those comparisons are at mismatched granularity**, see below.
 `leaf` also restores a working epoch loop — 12.9, 7.3, 6.5, 5.7, 5.1, 4.9, 4.2,
 3.8 per cent removed per epoch, against `eom` spending 87.9% in a single pass
 and doing nothing at all in epochs 4–8.
@@ -79,6 +80,68 @@ and doing nothing at all in epochs 4–8.
 Pick `leaf` to build a taxonomy; pick `eom` to rank candidates. Both entry
 points carry these numbers next to the control. `eom` remains the default
 because every committed result in this workspace was produced with it.
+
+---
+
+## Matched granularity — added after the implementation review
+
+The comparison above puts `eom` at 36 families against `leaf` at 1,081, because
+the default cut returns about *k*/2 groups and *k* differs by 30×. Finer
+partitions are intrinsically harder to reproduce, so the reviewer asked whether
+the reproducibility gap was method or granularity. It was largely granularity —
+**and so was the coherence gap, in the opposite direction.**
+
+Cut both to the same family count with `criterion="maxclust"`, 3 seeds:
+
+| target families | method | family ARI | narrow % | median span |
+|---:|---|---:|---:|---:|
+| 20 | `eom` | 0.5189 | 0.567 | 40.3 |
+| 20 | `leaf` | 0.4524 | 0.000 | 273.8 |
+| **36** | **`eom`** | **0.5190** | **0.670** | 22.7 |
+| **36** | **`leaf`** | **0.4888** | **0.194** | 265.0 |
+| 54 | `eom` | 0.1994 | 0.776 | 20.8 |
+| 54 | `leaf` | 0.4475 | 0.194 | 77.1 |
+| 72 | `eom` | 0.0332 | 0.776 | 25.1 |
+| 72 | `leaf` | 0.4170 | 0.774 | 76.3 |
+
+**The 4.8× reproducibility gap shrinks to 6%** at 36 families (0.519 vs 0.489).
+**And `leaf`'s 8.8× coherence advantage inverts**: coarsened to 36 families its
+narrow share falls from 6.820% to 0.194%, *below* `eom`'s 0.670%, with a median
+family span of 265 MHz against 22.7.
+
+So `leaf`'s coherence is a property of its **fine granularity**, not of the
+extraction method. Its 2,162 small groups are frequency-coherent; merged to 36
+they are not, because the merging is driven by centroid proximity in a feature
+space where frequency is one column among fifteen.
+
+Two things follow.
+
+**The user-choice framing survives, but the axes are different from what the PR
+said.** It is not "coherent vs reproducible method". It is a granularity choice:
+~2,000 small coherent groups that individually do not reproduce across seeds
+(`leaf`), or ~36 large groups that reproduce well and stay reasonably narrow
+(`eom` + matching). Both are legitimate; they answer different questions.
+
+**`eom`'s default is now positively justified**, not merely precedent. At every
+matched family count from 20 to 36 it is at least as reproducible and 3–∞×
+more coherent. Note `eom` is non-monotone — its ARI collapses from 0.519 at 36
+families to 0.033 at 72 (i.e. unmatched) — so *matching is doing the work*, and
+`eom` without `--match` is the worst of the options measured.
+
+One genuinely interesting cell: `leaf` cut to 72 families scores ARI 0.4170 at
+narrow 0.774%, against `eom`'s raw 72 clusters at 0.0332 / 0.776%. At equal
+group count and equal coherence, `leaf`-plus-matching is **12.6× more
+reproducible** than unmatched `eom`. Anyone comparing to the committed results,
+which are all unmatched, should know that.
+
+### The headline survives its own null
+
+`metrics.coarsening_null()` permutes the cluster→family assignment while
+preserving family sizes, so it measures what family ARI would be if matching
+grouped clusters arbitrarily. Measured in the Bench: **family ARI 0.519 against
+a null of 0.020.** Coarsening does not inflate ARI; ARI's chance correction
+handles it. Independently confirmed by the reviewer on structureless data
+(cluster ARI 0.00005 → family ARI −0.00003).
 
 ---
 

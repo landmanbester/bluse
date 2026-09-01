@@ -366,7 +366,14 @@ Grouping clusters into families by Ward linkage on their centroids recovers it:
 | `leaf` | 0.0316 | 0.1077 |
 
 An 18.6× gain for `eom`, with the narrow-cluster share essentially intact.
-`bluse-cluster --match`, or the Families control in the Bench.
+`bluse-cluster --match`, or the Families control in the Bench. It survives its
+own null: family ARI 0.519 against 0.020 when the cluster&rarr;family map is
+permuted at fixed family sizes.
+
+**Matching is doing the work, not the selection method.** Unmatched `eom` at 72
+clusters scores ARI 0.033; `leaf` matched down to 72 families scores 0.417 at
+the same narrow share. Every committed result in this workspace predates
+matching and is therefore in the 0.03 regime.
 
 ### `eom` vs `leaf` is a user choice
 
@@ -379,10 +386,27 @@ They win on different axes, so the tool asks instead of deciding:
 | family membership ARI | **0.5190** | 0.1077 |
 | epochs doing any work | 3 of 8 | **8 of 8** |
 
-`leaf` groups 8.8× more coherently in frequency and restores a working epoch
-loop; `eom` plus matching reproduces 4.8× better. Pick `leaf` to build a
-taxonomy, `eom` to rank candidates. `eom` stays the default because every
-committed result here was produced with it.
+**Both of those numbers are granularity effects, and they point opposite
+ways.** The default cut returns about *k*/2 groups, so that table compares
+`eom` at 36 families against `leaf` at 1,081. Matched at equal family count
+(3 seeds):
+
+| target families | `eom` ARI / narrow % | `leaf` ARI / narrow % |
+|---:|---:|---:|
+| 20 | 0.5189 / 0.567 | 0.4524 / 0.000 |
+| 36 | 0.5190 / 0.670 | 0.4888 / 0.194 |
+| 72 | 0.0332 / 0.776 | 0.4170 / 0.774 |
+
+The reproducibility gap shrinks to 6%, and `leaf`'s coherence advantage
+*inverts* — coarsened to 36 families its narrow share falls to 0.194%, below
+`eom`'s 0.670%. `leaf`'s coherence is a property of its fine granularity, not
+of the extraction method.
+
+So the choice is really about granularity: ~2,000 small frequency-coherent
+groups that individually do not reproduce (`leaf`), or ~36 large groups that
+reproduce well and stay reasonably narrow (`eom` + matching). `eom` stays the
+default, now on measurement rather than precedent — at every matched count from
+20 to 36 it is at least as reproducible and more coherent.
 
 **The epoch budget was being spent in one pass.** Under `eom`, epoch 1 removes
 87.9%, epoch 2 removes 12.0%, epoch 3 removes 0.1%, and epochs 4–8 remove
@@ -451,12 +475,22 @@ regression test fails if anyone recombines them.
 ### Still deferred
 
 A contribution-equalising scaling mode, and reworking `f02` onto its native
-linear grid. Both were expected to be the next priority. One measurement argues
-against: dropping `x03` and `f07` outright — the crudest version of that fix —
-takes `leaf`'s narrow share from 6.820% to **2.969%**, i.e. the two dominant
-columns are *helping* coherence, not hurting it. That is not a controlled
-comparison, but combined with the k-NN result it means the scaling work should
-be evaluated against `narrow_frac` before it is built.
+linear grid. The case is weaker than expected, but for a sharper reason than the
+one first recorded here.
+
+The original argument was that dropping `x03` and `f07` takes `leaf`'s narrow
+share from 6.820% to 2.969%, so the dominant columns help rather than hurt. That
+over-read the experiment, and the review said so: **dropping is not
+down-weighting** (equalisation would move `x03` from 24.3% to 6.7%, not to
+zero), and more decisively, **the k-NN measurement already says `x03` is fine** —
+7.4% local against a 6.7% equal share. The experiment removed a well-behaved
+column, so it is a second demonstration of the k-NN finding rather than evidence
+about equalisation.
+
+The column the local measurement actually indicts is **`f09_temporal_skew`**, at
+15.5% local against 6.7% equal and benign on every global statistic. That is the
+column to down-weight for a fast read on whether equalisation would help, and it
+is the real precursor to the deferred scaling spec.
 
 
 ## Next
