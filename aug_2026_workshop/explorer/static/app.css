@@ -323,13 +323,70 @@ td .swatch {
 #hit dt { color: var(--dimmer); }
 #hit dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 
-.htmx-request #spin { opacity: 1; }
+/* hx-indicator puts .htmx-request on the INDICATOR element itself, so this has
+   to be #spin.htmx-request. It was written as a descendant selector and so
+   never matched anything. */
+#spin.htmx-request { opacity: 1; }
 #spin {
   opacity: 0; transition: opacity .15s;
   font-family: var(--mono); font-size: 10px;
   color: var(--accent); letter-spacing: 0.14em;
 }
 
+/* ---- busy indicator ----------------------------------------------------- */
+
+/* A run is 1-2 s and the results panel keeps showing the PREVIOUS numbers
+   while it works, which reads as "nothing happened". Swap the time value for a
+   spinner so the one number that is provably stale is the one that moves. */
+.spinner, .spinner-text { display: none; }
+.spinner {
+  width: 15px; height: 15px; margin-top: 2px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cb-spin .7s linear infinite;
+}
+@keyframes cb-spin { to { transform: rotate(360deg); } }
+.spinner-text {
+  font-family: var(--mono); font-size: 13px; color: var(--accent);
+}
+#results.htmx-request .tv { display: none; }
+#results.htmx-request .spinner { display: block; }
+#results.htmx-request .stats { opacity: 0.55; transition: opacity .15s; }
+#results.htmx-request .stat:last-child { opacity: 1; }
+/* The plot is about to be recoloured; dim it so it reads as provisional. */
+#results.htmx-request ~ * #plot, body:has(#results.htmx-request) #plot {
+  opacity: 0.45; transition: opacity .15s;
+}
+
+/* ---- legend ------------------------------------------------------------- */
+
+.legend {
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel);
+}
+.lg-row { display: flex; gap: 12px; margin-bottom: 5px; }
+.lg-row:last-child { margin-bottom: 0; }
+.lg-k {
+  flex: 0 0 52px; font-family: var(--mono); font-size: 9.5px;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--dimmer);
+  padding-top: 2px;
+}
+.lg-v { font-size: 11px; color: var(--dim); line-height: 1.55; }
+.lg-v b { color: var(--text); font-weight: 600; }
+.lg-v code {
+  font-family: var(--mono); font-size: 10px; color: var(--text);
+  background: var(--panel-2); padding: 0 3px; border-radius: 2px;
+}
+.sw {
+  display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+  margin: 0 1px; vertical-align: -1px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
+  /* A ring that cannot spin just looks like a broken glyph. */
+  #results.htmx-request .spinner { display: none; }
+  #results.htmx-request .spinner-text { display: inline; }
 }

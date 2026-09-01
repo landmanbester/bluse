@@ -22,7 +22,8 @@
       <p class="error">No feature files yet. Run
         <code>python track_b_features.py</code> to build them.</p>
     {% else %}
-    <form hx-post="/dataset" hx-target="#controls" hx-swap="innerHTML">
+    <form hx-post="/dataset" hx-target="#controls" hx-swap="innerHTML"
+          hx-indicator="#spin">
       <div class="eyebrow">Dataset</div>
       <label class="field">
         <span>file</span>

@@ -1,4 +1,5 @@
-<form id="cluster-form" hx-post="/cluster" hx-target="#results" hx-swap="innerHTML">
+<form id="cluster-form" hx-post="/cluster" hx-target="#results"
+      hx-swap="innerHTML" hx-indicator="#results, #spin">
   <input type="hidden" name="key" value="{{ ds.key }}">
 
   <div class="eyebrow">Feature weights</div>

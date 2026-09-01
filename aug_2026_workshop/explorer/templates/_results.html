@@ -10,20 +10,44 @@
   <div class="stat"><div class="k">features</div>
     <div class="v">{{ run.stats.n_features }}</div></div>
   <div class="stat"><div class="k">time</div>
-    <div class="v">{{ '%.2f'|format(run.stats.seconds) }}<span class="sub">s{% if cached %} cached{% endif %}</span></div></div>
+    <div class="v"><span class="tv">{{ '%.2f'|format(run.stats.seconds) }}<span
+      class="sub">s{% if cached %} cached{% endif %}</span></span><span
+      class="spinner" role="status" aria-label="clustering"></span><span
+      class="spinner-text">working</span></div></div>
+</div>
+
+<div class="legend">
+  <div class="lg-row">
+    <span class="lg-k">colour</span>
+    <span class="lg-v"><b>size rank, not identity.</b> The
+      {{ colours|length }} biggest clusters take these hues in order
+      {% for c in colours %}<i class="sw" style="background:{{ c }}"></i>{% endfor %}
+      then <i class="sw" style="background:{{ minor }}"></i> every smaller one,
+      <i class="sw" style="background:{{ noise }}"></i> noise. Ranked per run.</span>
+  </div>
+  <div class="lg-row">
+    <span class="lg-k">number</span>
+    <span class="lg-v"><b>a discovery-order serial, not a batch number.</b>
+      HDBSCAN restarts ids at <code>0</code> in every batch, so we add a running
+      offset to keep them distinct — one batch mints many. Real provenance is in
+      the <code>ep</code> and <code>batch</code> columns. Not comparable between
+      runs.</span>
+  </div>
 </div>
 
 {% if summary %}
 <table>
   <thead><tr>
-    <th>cluster</th><th>n</th><th>RFI</th><th>freq MHz</th>
-    <th>span</th><th>SNR</th><th>beams</th><th>obs</th>
+    <th>cluster</th><th>n</th><th>ep</th><th>batch</th><th>RFI</th>
+    <th>freq MHz</th><th>span</th><th>SNR</th><th>beams</th><th>obs</th>
   </tr></thead>
   <tbody>
   {% for r in summary %}
     <tr onclick="focusCluster({{ r.cluster }})" style="cursor:pointer">
       <td><span class="swatch" style="background:{{ colour(r.cluster, rank) }}"></span>{{ r.cluster }}</td>
       <td>{{ '{:,}'.format(r.n) }}</td>
+      <td class="pct">{{ r.epoch }}</td>
+      <td class="pct">{{ r.batch }}</td>
       <td class="pct">{{ r.rfi_pct|round|int }}%</td>
       <td>{{ '%.4f'|format(r.freq) }}</td>
       <td class="pct">{{ '%.3f'|format(r.span) }}</td>

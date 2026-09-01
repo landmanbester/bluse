@@ -258,8 +258,15 @@ def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
     n = len(X)
     labels = np.full(n, -1, dtype=np.int32)
 
+    # origin[cluster_id] = (epoch, batch) it was discovered in. Cluster ids are
+    # a discovery-order serial, NOT a batch number -- one batch usually mints
+    # several -- so the mapping has to be recorded rather than inferred.
+    origin = {}
+
     if mode == "single":
         labels = run_hdbscan(X, mcs, ms).astype(np.int32)
+        for c in np.unique(labels[labels >= 0]):
+            origin[int(c)] = (1, 0)
     else:
         alive = np.arange(n)
         rng = np.random.default_rng(seed)
@@ -284,22 +291,27 @@ def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
                     # n_clusters tracked max-over-batches instead of the total.
                     # A running offset keeps every batch's clusters distinct.
                     labels[b[hit]] = lab[hit] + next_id
+                    for c in range(next_id, next_id + int(lab[hit].max()) + 1):
+                        origin[c] = (ep, s // batch)
                     next_id += int(lab[hit].max()) + 1
                 survivors.append(b[~hit])
             alive = np.concatenate(survivors) if survivors else np.array([], int)
             if len(alive) < mcs * 2:
                 break
         labels[alive] = -1
-    return labels, X
+    return labels, X, origin
 
 
-def summarise(df, labels):
+def summarise(df, labels, origin=None):
+    origin = origin or {}
     rows = []
     for lab in np.unique(labels[labels >= 0]):
         m = labels == lab
         d = df[m]
         rows.append({
             "cluster": int(lab), "n": int(m.sum()),
+            "epoch": origin.get(int(lab), (0, 0))[0],
+            "batch": origin.get(int(lab), (0, 0))[1],
             "rfi_pct": float((d.weak_label == 1).mean() * 100),
             "freq": float(d.frequency.median()),
             "span": float(d.frequency.max() - d.frequency.min()),
@@ -307,7 +319,8 @@ def summarise(df, labels):
             "beams": float(d.n_beams.median()),
             "obs": int(d.obsid.nunique()),
         })
-    cols = ["cluster", "n", "rfi_pct", "freq", "span", "snr", "beams", "obs"]
+    cols = ["cluster", "n", "epoch", "batch", "rfi_pct", "freq", "span",
+            "snr", "beams", "obs"]
     if not rows:
         # Every point is noise. Without the explicit columns the empty frame has
         # none, and sort_values("n") raises KeyError before the caller's
@@ -421,10 +434,10 @@ async def do_cluster(request: Request):
     cached = sig in RUNS
     if not cached:
         t0 = time.time()
-        labels, _ = cluster(ds, cols, p["scaling"], p["mode"], p["mcs"],
-                            p["ms"], p["epochs"], p["batch"], p["seed"])
+        labels, _, origin = cluster(ds, cols, p["scaling"], p["mode"], p["mcs"],
+                                    p["ms"], p["epochs"], p["batch"], p["seed"])
         elapsed = time.time() - t0
-        summary = summarise(ds.df, labels)
+        summary = summarise(ds.df, labels, origin)
         noise = labels == -1
         conf = noise & (ds.df.n_beams.to_numpy() <= 4)
         rank = {int(c): i for i, c in enumerate(summary["cluster"])}
@@ -445,6 +458,7 @@ async def do_cluster(request: Request):
     run = RUNS[sig]
     resp = templates.TemplateResponse(request, "_results.html", {
         "run": run, "cached": cached, "rank": run.rank,
+        "colours": COLOURS, "minor": MINOR_COLOUR, "noise": NOISE_COLOUR,
         "summary": run.summary.head(40).to_dict("records"),
         "history": [RUNS[h] for h in HISTORY if h in RUNS],
         "key": key,

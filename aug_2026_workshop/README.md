@@ -214,6 +214,20 @@ quantile / GLOBULAR-literal), **mode** (epochs / single), then `batch`,
 `min_samples`, `min_cluster_size`, `epochs`, `seed`. There is no `epsilon`
 control — see gotcha 9 in `AGENTS.md` for why it cannot work.
 
+**Reading the colours.** A hue means *size rank*, not identity: the 12 biggest
+clusters in a run get their own colour, everything smaller is one grey, noise is
+darker still. So a colour answers "Nth biggest in this run" and does not carry
+over between runs. The cluster *number* is a discovery-order serial, **not** a
+batch number — HDBSCAN restarts its ids at 0 in every batch and we add a running
+offset to keep them distinct, so one batch mints many consecutive ids. The `ep`
+and `batch` columns give the real provenance. The legend above the table says
+all of this in place.
+
+While a run is in flight the time reading is replaced by a spinner, the stats
+strip and the plot dim, and `working` appears in the header — a re-cluster takes
+1–2 s and the panel otherwise keeps showing the previous numbers, which reads as
+nothing having happened.
+
 How it works: the embedding projects exactly the matrix HDBSCAN sees, so it is
 cached per (method, scaling, feature set) and refetched only when one of those
 changes. A re-cluster at the same geometry ships an Int32Array of labels and
