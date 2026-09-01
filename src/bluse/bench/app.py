@@ -50,6 +50,7 @@ from .. import paths
 # scale() lives in diagnostics so the Bench and the CLI cannot drift
 # apart on the one thing that matters most to the metric.
 from .. import diagnostics
+from .. import matching
 from .. import metrics
 from ..diagnostics import scale
 
@@ -539,6 +540,63 @@ async def do_cluster(request: Request):
         "emb": emb_sig(key, form.get("embed", "pca"), p["scaling"], cols),
     }})
     return resp
+
+
+@app.post("/stability", response_class=HTMLResponse)
+async def do_stability(request: Request):
+    """
+    Re-run one configuration across N seeds and report how much of it survives.
+
+    Deliberately behind a button rather than on every cluster: it is N times
+    the cost and it is the slowest thing in the tool.
+
+    Its seeds are kept OUT of HISTORY. The run cache key includes the seed and
+    HISTORY is capped at 12, so one N=5 sweep would otherwise insert five
+    near-identical entries and evict most of the comparison history the user
+    was building.
+    """
+    form = await request.form()
+    key = form["key"]
+    ds = DATASETS.get(key)
+    if ds is None:
+        return HTMLResponse('<p class="error">Dataset expired. Load it again.</p>')
+
+    cols = [c for c in form.getlist("feat") if c in ds.columns]
+    if len(cols) < 2:
+        return HTMLResponse('<p class="error">Keep at least two features on.</p>')
+
+    n_seeds = max(2, min(int(form.get("n_seeds", 5)), 10))
+    p = dict(scaling=form.get("scaling", "robust"),
+             mode=form.get("mode", "epochs"),
+             csm=form.get("csm", "eom"),
+             mcs=int(form.get("mcs", 4)),
+             ms=int(form.get("ms", 8)),
+             epochs=int(form.get("epochs", 8)),
+             batch=int(form.get("batch", 3000)))
+
+    def run_fn(seed):
+        labels, _, _, _ = cluster(ds, cols, p["scaling"], p["mode"], p["mcs"],
+                                  p["ms"], p["epochs"], p["batch"], seed,
+                                  p["csm"])
+        return labels
+
+    t0 = time.time()
+    s_cl = metrics.stability(run_fn, seeds=tuple(range(n_seeds)))
+
+    # The same question one level up. Cluster ids are batch artefacts, so the
+    # interesting number is whether FAMILIES reproduce where clusters do not.
+    def run_fam(seed):
+        labels, X, _, _ = cluster(ds, cols, p["scaling"], p["mode"], p["mcs"],
+                                  p["ms"], p["epochs"], p["batch"], seed,
+                                  p["csm"])
+        fam, _ = matching.match(labels, X)
+        return fam
+
+    s_fam = metrics.stability(run_fam, seeds=tuple(range(n_seeds)))
+    elapsed = time.time() - t0
+    return templates.TemplateResponse(request, "_stability.html", {
+        "s": s_cl, "f": s_fam, "params": p, "seconds": elapsed,
+    })
 
 
 @app.get("/labels.bin")

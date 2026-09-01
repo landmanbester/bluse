@@ -22,6 +22,15 @@
       class="spinner-text">working</span></div></div>
 </div>
 
+<form hx-post="/stability" hx-target="#stability" hx-swap="innerHTML"
+      hx-include="#cluster-form" hx-indicator="#results, #spin"
+      style="margin:0 0 10px">
+  <input type="hidden" name="key" value="{{ key }}">
+  <input type="hidden" name="n_seeds" value="5">
+  <button type="submit" class="ghost">Check stability (5 seeds)</button>
+</form>
+<div id="stability"></div>
+
 <div class="legend">
   <div class="lg-row">
     <span class="lg-k">colour</span>
