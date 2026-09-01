@@ -1,13 +1,14 @@
 # Outstanding work — BLUSE
 
-**Updated:** 2026-09-01, after closing P0-1 and P0-2.
+**Updated:** 2026-09-01, after closing P0-1, P0-2 and P1-4.
 **Purpose:** enough context to resume any item without re-deriving it.
 
-State: on `main`, clean tree, 58 tests passing (54 + 4 skipped outside a
+State: on `main`, clean tree, 61 tests passing (57 + 4 skipped outside a
 workspace). PR #1 merged the Cluster Bench measurement work — three new
 modules (`diagnostics`, `metrics`, `matching`), wiring into both entry points,
 and the repository's first test suite. P0-1 and P0-2 are since closed by
-measurement; **P0-3 is the only open P0 item**.
+measurement, as is P1-4; **P0-3 is the only open P0 item**, and P1-5 is
+unblocked and ready to spec.
 
 ---
 
@@ -144,31 +145,54 @@ logic; and `bench/templates/_controls.html` for the caption.
 
 ---
 
-## P1 — the deferred scaling work, gated on P0-2
+## P1 — the deferred scaling work
 
-### 4. `f02` ordinal rework — **now blocks item 5**
-`is_zero_drift` indicator plus non-zero drift on its **native linear grid**.
-Two constraints, both measured:
-- `driftSteps` exists in the HDF5 and in `catalogues/*_cat.parquet` but **not**
-  in the feature parquet, so it needs plumbing through extraction first.
-- The lattice is **per file** (above), so keep physical `abs(driftRate)` on a
-  linear scale rather than the step index, or `all_features.parquet` compares
-  non-comparable values.
+### 4. `f02` ordinal rework — **DONE 2026-09-01, REJECTED**
 
-Note the boolean introduces a 0.734 tie by construction, which is why the
-feature registry's `kind` field exists — tie thresholds skip `boolean`.
+Result in [`f02-rework-experiment-2026-09.md`](f02-rework-experiment-2026-09.md).
 
-### 5. Contribution-equalising scaling mode
+The planned repair — a `zero_drift` indicator plus drift magnitude on its
+native linear grid — is **worse under `eom` at every family count** (best
+family ARI 0.372 against 0.519) and leads under `leaf` only at 8–24 families,
+where the narrow share is 0.000% and families span 240–280 MHz. The indicator
+is separately dangerous: it is the lowest-share column measured (0.33% k-NN),
+so equalisation would weight it **10.256**, twice the 5.216 on `f02` that
+destroys `eom`.
+
+The two recorded constraints turned out not to bind: `driftRate` is already in
+the feature parquet and `flag_zero_drift` already exists as a Track A flag, so
+**no `driftSteps` plumbing was needed**.
+
+Kept `quantile-normal`. Suppressing `f02` is load-bearing, and the information
+is not lost: zero drift is a real RFI marker (odds ratio 2.96, p = 7e-31) but
+`f02` ranks 10th of 15 by mutual information with `weak_label`, while
+`x01_drift_residual` — drift-trajectory coherence — ranks **1st** with 4.9×
+more. Pinned by `test_f02_keeps_its_rank_transform`.
+
+### 5. Contribution-equalising scaling mode — **UNBLOCKED, ready to spec**
+
 Robust scaling equalises the **IQR**, but HDBSCAN responds to **variance**, and
 the IQR-to-variance ratio depends on distribution shape — so contributions run
 1.7%–24.3% globally. Target the distance share directly rather than a spread
 proxy. Evaluate against `narrow_frac` and `ari_restricted`, not by eye.
 
-**Measured 2026-09-01 (P0-2): it works, but only after `f02` is fixed.** Under
-`leaf` it buys family ARI 0.4888 → 0.6659 and median span 265 → 79 MHz. Under
-`eom` it collapses the run, entirely because it amplifies `f02`'s 26.6% tie
-5.2×. Weight caps do not rescue it. Report per method; it is not a universal
-improvement.
+**It was never blocked by `f02`** — that inference from P0-2 was tested in P1-4
+and is false. Repairing `f02` leaves `eom` broken under equalisation (0.125
+against 0.519 plain) and makes `leaf` *worse* (0.666 → 0.605). `f02` was the
+vehicle of the `eom` collapse, not its cause; `eom`'s single root-level
+stability comparison is fragile to reweighting in general.
+
+**Spec it against these measured constraints:**
+- **`leaf` only.** Under `eom` equalisation collapses the run whatever `f02`
+  does, and weight caps do not rescue it (capped at 2.0, `eom` sits at 0.0742).
+- **Skip `boolean` and `flag` columns.** This is what the registry's `kind`
+  field is for. A boolean's low variance draws a huge equalising weight.
+- **Report at a stated family count in the non-degenerate region (≥36),**
+  where the narrow share is non-zero. Below ~30 families every leaf
+  configuration has a 0.000% narrow share, and famARI there is meaningless.
+- **Best measured configuration to beat:** equalisation over the existing
+  feature set, `leaf`, famARI **0.7683 at 16 families** / **0.6659 at 36**,
+  median span 78.6 MHz against the 265.0 MHz baseline.
 
 ---
 

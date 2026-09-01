@@ -86,10 +86,14 @@ KINDS = ("continuous", "ordinal", "boolean", "flag")
 # Columns whose kind is not "continuous". Everything absent is continuous.
 # f02 is ORDINAL, not continuous: |driftRate| takes 42 values on an exact
 # 0.010711 Hz/s lattice on sband_short -- the seticore Taylor-tree drift step --
-# so it is a 42-level ordinal that normalise() currently rank-transforms as
-# though it were a continuum. The lattice constant is per-file (6 distinct
-# values across the eight files, spanning 5.26x), so driftSteps is a per-file
-# index and NOT interchangeable with a physical drift rate.
+# so it is a 42-level ordinal that normalise() rank-transforms as though it
+# were a continuum. The lattice constant is per-file (6 distinct values across
+# the eight files, spanning 5.26x), so driftSteps is a per-file index and NOT
+# interchangeable with a physical drift rate.
+#
+# Rank-transforming it is DELIBERATE. See TRANSFORMS and
+# docs/f02-rework-experiment-2026-09.md: replacing the rank transform with the
+# native linear grid was measured and rejected.
 COLUMN_KINDS = {
     "f02_abs_drift": "ordinal",
     "f12_bandwidth_hz": "ordinal",
@@ -240,7 +244,9 @@ def f01_frequency(df):
 @meta_feature("f02_abs_drift",
               description="GLOBULAR #2. |drift rate| [Hz/s]. Sign discarded; "
                           "quantile-transformed to Gaussian by normalise() to "
-                          "stop the huge zero-drift spike dominating.")
+                          "stop the huge zero-drift spike dominating -- which "
+                          "is measured to be load-bearing, not incidental. "
+                          "See docs/f02-rework-experiment-2026-09.md.")
 def f02_abs_drift(df):
     return {"f02_abs_drift": np.abs(df["driftRate"].to_numpy(dtype=np.float64))}
 
@@ -497,6 +503,26 @@ def x03_channel_offset(df):
 # bounded feature alone.
 TRANSFORMS = {
     "f01_frequency":         "quantile-uniform",
+    # DO NOT change f02 to a linear scale without re-running the experiment in
+    # docs/f02-rework-experiment-2026-09.md. It looks wrong -- |driftRate| is a
+    # 42-level ordinal on an exact lattice, and rank-transforming it throws its
+    # 26.6% zero-drift tie to the -5.199 bound, leaving the column with 0.8% of
+    # the k-NN distance share, the least of any feature. Suppressing it is
+    # nevertheless the right behaviour, and was measured three ways:
+    #
+    #   Under eom the linear grid is worse at EVERY family count (best family
+    #   ARI 0.372 against 0.519). Under leaf it leads only at 8-24 families,
+    #   where the narrow-cluster share is 0.000% and families span 240-280 MHz
+    #   -- the degenerate corner. A zero-drift indicator column is worse again,
+    #   and is the lowest-share column in the matrix (0.33% k-NN), so
+    #   contribution equalisation would weight it 10.256 -- twice the 5.216 on
+    #   f02 that is measured to destroy eom.
+    #
+    #   The suppressed information is not lost. Zero drift IS a real RFI marker
+    #   (28.14% of RFI hits against 11.70% of beam-confined, odds ratio 2.96,
+    #   p = 7e-31), but f02 ranks 10th of 15 columns by mutual information with
+    #   weak_label, while x01_drift_residual -- drift-trajectory coherence,
+    #   measured from the stamp -- ranks 1st with 4.9x more.
     "f02_abs_drift":         "quantile-normal",
     "f03_snr":               "log-unit",
     "f04_spectral_skew":     "unit",
