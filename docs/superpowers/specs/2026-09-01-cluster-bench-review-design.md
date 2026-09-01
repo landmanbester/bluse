@@ -118,19 +118,50 @@ def quality(labels, df, *, narrow_mhz=1.0) -> dict
 | `largest_pct` | largest cluster as % of all rows |
 | `median_size` | median cluster size |
 | `narrow_frac` | **fraction (0–1) of clustered hits in clusters spanning < `narrow_mhz`**; rendered as a percentage |
+| `narrow_frac_null` | the same under a size-preserving label permutation |
+| `narrow_enrichment` | `narrow_frac / narrow_frac_null` |
 | `narrow_clusters` | count of such clusters |
 | `median_span_mhz` | median cluster frequency span |
 | `ami` | AMI vs `weak_label` over rows where it is not −1 |
-| `enrichment` | % of clusters significantly enriched in `weak_label == 0` |
+| `enrichment` | **fraction of clustered hits sitting in clusters significantly enriched** in `weak_label == 0` |
+
+`narrow_frac` is reported at **two thresholds, 0.1 and 1.0 MHz**, so a reader can
+see it is not an artefact of where the line was drawn. `narrow_mhz` is already a
+keyword; this is a loop.
 
 `narrow_frac` is the headline. It needs no labels, has a dynamic range of ~0.1%
 to tens of percent, and rewards physical coherence — which is what an RFI
 taxonomy, the stated Track B deliverable, actually requires.
 
+**It gets a null, because every other metric here has one.** Small clusters are
+narrow by chance more often than large ones, and `leaf`'s median size is 6
+against `eom`'s 11, so part of the 8.8× could be arithmetic. `narrow_frac_null`
+comes from permuting labels while **preserving the cluster size distribution**;
+`narrow_enrichment` is the ratio. The confound is expected to be small — the
+analytic floor for a size-6 cluster drawn from a single emitter holding 30% of
+all hits is `0.30^6 = 0.073%`, two orders of magnitude below both observations —
+but the headline metric being the only one without a null is exactly the
+asymmetry that let AMI through unchallenged for a round.
+
 `enrichment` uses a one-sided hypergeometric test per cluster against the global
-`weak_label == 0` rate, Benjamini–Hochberg corrected at q = 0.05. This is the
-statistic AMI cannot provide at 31:1: it asks whether *any* cluster concentrates
-the minority class, which is not swamped by the majority.
+`weak_label == 0` rate, Benjamini–Hochberg corrected at q = 0.05, and is
+expressed **in hits rather than in clusters** so that it shares a scale with
+`narrow_frac`. A per-cluster percentage would compare 79 clusters against 2,127
+on a statistic whose denominator is the cluster count — the same
+non-comparability that sank AMI in R-2. This is the statistic AMI cannot provide
+at 31:1: it asks whether *any* cluster concentrates the minority class, which is
+not swamped by the majority.
+
+**Detection floor, and why it constrains use.** At the global `weak_label == 0`
+rate of 872/27,828 = 3.13%, a *fully* confined cluster of 6 gives
+p ≈ 9.4 × 10⁻¹⁰ and clears BH at 2,127 tests comfortably; a fully confined
+cluster of 4 gives p ≈ 9.6 × 10⁻⁷ and still clears; a cluster of 3 gives
+p ≈ 3.1 × 10⁻⁵ against a BH threshold near 2.4 × 10⁻⁵ and is marginal. Note
+further that at `min_cluster_size = 4` only a *fully* confined cluster clears —
+3-of-4 confined gives p ≈ 1.2 × 10⁻⁴ and fails. So the metric is close to its
+floor at our default, and **enrichment must not be compared across
+configurations with different `min_cluster_size`.** That belongs in the UI
+caption next to the 31:1 note.
 
 **UI copy is part of this deliverable.** `weak_label == 0` means *spatially
 confined*, not *verified clean*. AMI and enrichment are proxies for "is this
@@ -156,6 +187,10 @@ plus `k_mean`, `k_range`, and per-seed `quality()` as mean and range.
 **`ari_restricted` is the acceptance statistic.** Reporting only the composite
 is the exact error that produced the withdrawn "20×" claim, and the API makes it
 impossible to repeat by never returning a single scalar.
+
+**`stability()` runs at either level.** It needs only `run_fn(seed) -> labels`,
+so passing family ids instead of cluster ids is a call-site change, not an API
+change. Running it on families is the point of §7 — see acceptance criterion 6.
 
 Cost: N seeds is N clustering runs. Cache by `(config, seed)` so the marginal
 cost of the N-th is one run; default N=5, configurable, and it reuses the run
@@ -221,6 +256,13 @@ Calibrate it on the first run, record the numbers in
 Flagging both ends is the point: robust scaling misrepresents the distribution
 in **both** directions, and fixing only the under-weighted instance leaves the
 larger half in place.
+
+**The two share flags are not independent tests, and the rail copy must say so.**
+Shares sum to 1 by construction, so a column at 24.3% mechanically depresses
+every other column toward the lower bound. `x03` firing "over" and `f02` firing
+"under" is one observation about the distribution of shares, not two findings.
+The flags remain individually useful for pointing at a column; they must not be
+counted as independent evidence.
 
 ---
 
@@ -295,6 +337,21 @@ reference) are the argument for having a deterministic default.
 Returns `(family_ids, info)` where `info` carries the cut used, the family count,
 and the centroid NN-distance distribution for the dendrogram.
 
+**The first family taxonomy is provisional and must be re-derived after the
+contribution-equalising scaling of §9 lands.** Ward runs on centroids in the
+scaled space, and that space carries the 14× share spread this spec explicitly
+postpones fixing — with `x03_channel_offset` at 24.3% and `f07_kurt_bw_corr` at
+13.1%, families will be grouped substantially by channel offset and by a clipped
+correlation coefficient. The ordering is still right, because matching is what
+makes the scaling work evaluable. But an RFI taxonomy is the headline
+deliverable, and without this sentence someone will present the first run of
+families as settled.
+
+As a cheap bound on how much the deferred work will move the taxonomy: run
+matching once with `x03` and `f07` excluded from the centroid space and compare
+family count and median family frequency span against the full-space run. Two
+runs of an existing harness.
+
 ---
 
 ## 8. Wiring
@@ -323,7 +380,11 @@ outcome in `aug_2026_workshop/README.md` with numbers either way.
   "N raw clusters → M families".
 - New `POST /stability` route, run on demand rather than on every cluster — it
   is N× the cost and belongs behind a button. Reuses the current run as one of
-  its seeds.
+  its seeds. **Its seeds are kept out of `HISTORY`** — the cache key includes
+  `seed` and `HISTORY` is capped at 12 with `del HISTORY[12:]`, so one N=5 sweep
+  would otherwise insert five near-identical entries and evict most of the
+  comparison history the user was building. Either exclude the sweep's seeds or
+  insert it as one grouped entry showing the three ARI numbers.
 - New `GET /values.bin?col=` for colour-by-feature-value on the scatter
   (P1-4), which is what makes the §5 shares visible rather than tabular.
 - **D-4:** `load_dataset` fits the `robust`/`quantile` scaler on the full column
@@ -405,34 +466,80 @@ The repository has no tests and no CI. Three of the defects recorded in
 every knob except `min_cluster_size`" — and a small suite would have separated
 them.
 
-`tests/`, pytest, run against `mk_sample_hits` (the smallest workspace file) so
-the suite stays fast.
+### 10.1 Two suites, because they answer different questions
 
-**Invariants** (D-5's four, plus one):
+**`tests/unit/` — synthetic fixtures, committed, CI-able.** These gate a commit.
+A ~500-row feature matrix built by a fixture module with a fixed seed, carrying
+a **planted tie**, a **planted clip**, a **known narrow-cluster share** and a
+**known family structure**, covers every unit test below and all five
+invariants. Commit the generator, not the matrix.
+
+**`tests/workspace/` — golden values against real data**, marked
+`@pytest.mark.workspace` and skipped when `paths.workspace()` has no
+`features/`. These catch a real regression in the science; they cannot gate a
+commit. Each test states which file its number was measured on.
+
+The split is not stylistic. The original draft ran everything against
+`mk_sample_hits`, which fails on first execution for three independent reasons,
+all measured:
+
+| `mk_sample_hits` | value | consequence |
+|---|---:|---|
+| zero-drift fraction | **0.0000** | pre-filtered; `f02` tie is 0.4525, not the asserted 0.266 |
+| overlap with `lband_long` by `id` | **53.7%** | worst available fixture for anything density-related; `AGENTS.md` already excludes it from pooled statistics |
+| `weak_label` counts | **{0: 10206, −1: 4913}** | **no `weak_label == 1` rows at all**, so every AMI and enrichment test is degenerate |
+
+And no real data is committable in any case: `aug_2026_workshop/features/` and
+`data/` are both gitignored, 0 files tracked. A suite depending on either runs
+on one machine and nowhere else — which, with no CI, means it silently stops
+running the first time it breaks.
+
+### 10.2 Invariants
 
 1. Cluster ids are globally unique across batches and epochs.
-2. Changing `scaling` changes the label vector (ARI < 1.0).
+2. **At a pinned seed**, changing `scaling` changes the label vector
+   (ARI < 1.0). Compare `robust` against `none` at seed 0.
 3. Reported cluster count equals `len(np.unique(labels[labels >= 0]))`.
 4. No column with `kind` in (`continuous`, `ordinal`) has
    `max_tie_fraction > 0.5`.
 5. `ari_restricted` for a fixed configuration stays within a recorded band.
 
-**Unit tests:**
+**Invariant 2's seed pin is the whole test.** At a free seed, two runs of an
+*identical* configuration score ARI 0.024, so `< 1.0` passes on shuffle noise
+even if `scale()` were stubbed to return its input — which is the exact bug
+class the invariant exists to catch, and what `AGENTS.md` gotcha 9 describes.
+At a fixed seed a genuine no-op gives exactly 1.0 and the assertion bites.
 
-- `diagnostics.audit` against golden values measured in this session:
-  `f02_abs_drift_n` → `n_distinct=42`, `max_tie_fraction=0.266`,
-  `iqr_raw=5.954`; `x03_channel_offset_n` → `share_global≈0.243`.
-- `metrics.quality` on a synthetic labelling with known narrow-cluster share.
+**Invariant 5's band is derived from repeated 5-seed draws, not one.** At
+`ari_restricted ≈ 0.028` the statistic has meaningful variance of its own; a
+band recorded from a single draw is flaky in the way that trains people to
+ignore a suite. Record it from repeated draws, label it a smoke test, and keep
+it wide.
+
+### 10.3 Unit tests
+
+- `diagnostics.audit` on the synthetic fixture: the planted tie and planted clip
+  are recovered at their known values.
+- `metrics.quality` on a synthetic labelling with known narrow-cluster share;
+  `narrow_enrichment ≈ 1.0` when labels are permuted.
 - `metrics.stability` on a deterministic `run_fn` → `ari_restricted == 1.0`,
   `noise_agreement == 1.0`.
 - `matching.match` on synthetic centroids with a known family structure.
-- `features` registry: a feature registered without `kind` reports
-  `continuous`.
+- `features` registry: a feature registered without `kind` reports `continuous`.
 
-**Regression test for the withdrawn claim:** a labelling with 50% noise and
-randomised membership must show high `noise_agreement` and low
-`ari_restricted`. This is the `leaf` artefact in miniature, and it fails if
-anyone collapses the three stability numbers back into one.
+### 10.4 Workspace tests (golden, skipped without a workspace)
+
+Measured on `sband_short` unless stated: `f02_abs_drift_n` → `n_distinct = 42`,
+`max_tie_fraction = 0.266`, `iqr_raw = 5.954`; `x03_channel_offset_n` →
+`share_global ≈ 0.243`; `f07_kurt_bw_corr_n` → `clip_frac ≈ 0.010`, and
+≈ 0.043 on `all`.
+
+### 10.5 Regression test for the withdrawn claim
+
+A labelling with 50% noise and randomised membership must show high
+`noise_agreement` and low `ari_restricted`. This is the `leaf` artefact in
+miniature, and it fails if anyone collapses the three stability numbers back
+into one. Belongs in `tests/unit/` — it needs no real data.
 
 ---
 
@@ -460,9 +567,27 @@ Done when, on `sband_short` at Bench defaults:
 4. The epoch trace shows 87.9% removed in epoch 1 and zero in epochs 4–8.
 5. `POST /stability` at N=5 reports `ari_composite ≈ 0.024`,
    `ari_restricted ≈ 0.028`, `noise_agreement ≈ 0.999` for `eom`; and
-   ≈0.48 / ≈0.032 / ≈0.78 for `leaf`.
-6. Matching reduces `leaf`'s ~2,127 clusters to a family count that is stable
-   across seeds, reported as "N raw clusters → M families".
+   ≈0.48 / ≈0.032 / ≈0.78 for `leaf`. **`noise_agreement` is degenerate in the
+   `eom` arm** — it clusters 99.9% of points, so the statistic has almost no
+   variance there. Record it; do not read it as evidence, and gate nothing on
+   it.
+6. **`ari_restricted` computed on family ids** across N seeds, reported beside
+   the cluster-level figure, with family count and its range as secondary.
+
+   A stable family *count* is compatible with scrambled family *membership* —
+   40 families every run, different hits in each — so the count alone is the
+   easy half. This criterion matters more than a normal one because of what the
+   §1 table already shows: `ari_restricted` is 0.0279 for `eom` and 0.0316 for
+   `leaf`, meaning **cluster membership is currently not reproducible under
+   either selection method**; both sit at the noise floor. Matching is the most
+   plausible fix, because the mechanism destroying ARI is that one physical
+   population is minted as a fresh id in every batch and every epoch (§7), and
+   families are the level at which that should cancel.
+
+   **Record the outcome either way.** Family ARI ≈ 0.05 means matching did not
+   solve the problem, and that must be known before it ships. Family ARI ≈ 0.7
+   against a cluster-level 0.03 is the strongest single result available from
+   this work programme and should be written up as one.
 7. The `eom`-vs-`leaf` default decision is recorded in
    `aug_2026_workshop/README.md` with the numbers behind it.
 8. The test suite passes and covers all five invariants.
