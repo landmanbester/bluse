@@ -13,7 +13,8 @@ Seven HDF5 files, 21 GB, **2,022,171 hits total**. All share one columnar schema
 | File | Hits | Stamp cube | Duration | Δf | Band | Obs | Sources |
 |---|---:|---|---:|---:|---|---:|---:|
 | `lband_long.h5` | 557,690 | (n,1,57,120) | 286.0 s | 1.59 Hz | 855.7–1702.8 MHz | 100 | 3998 |
-| `lband_short.h5` | 866,002 | (n,1,24,120) | 120.4 s | 1.59 Hz | 856.0–1068.0 MHz | 143 | 3420 |
+| `lband_short_clean.h5` ✅ | 463,625 | (n,1,24,120) | 120.4 s | 1.59 Hz | 856.0–962.7 MHz | 143 | 3420 |
+| `lband_short.h5` ⛔ superseded | 866,002 | (n,1,24,120) | 120.4 s | 1.59 Hz | 856.0–1068.0 MHz | 143 | 3420 |
 | `uhf_long.h5` | 299,878 | (n,1,36,120) | 284.2 s | 1.01 Hz | 543.9–1080.0 MHz | 63 | 3850 |
 | `uhf_short.h5` | 208,774 | (n,1,15,120) | 118.4 s | 1.01 Hz | 544.0–679.8 MHz | 76 | 2242 |
 | `sband_long.h5` | 36,132 | (n,1,59,120) | 289.6 s | 1.63 Hz | 1968.8–2825.0 MHz | 32 | 866 |

@@ -8,10 +8,55 @@ Finding interesting things in ~2M BLUSE narrowband hits.
 | `explore.py` | Visual exploration of the raw HDF5 (stamps, metadata, coincidence) |
 | `rfi_masks.py` | Known-RFI frequency masks for MeerKAT, with provenance labels |
 | `track_a_filter.py` | **Track A** — the classical post-processing baseline |
-| `data/` | The 7 HDF5 stamp files (21 GB) |
+| `data/` | The HDF5 stamp files (21 GB) — see "Which data files to use" |
 | `catalogues/` | Track A output: filtered catalogues + cut-flows |
 | `plots/` | PNGs from `explore.py` |
 | `masks/` | Empirically derived RFI masks |
+
+## Which data files to use
+
+**Prefer a `*_clean.h5` file over the same-named original, always.**
+
+Two of the original files contain a contiguous block of corrupt stamp cubes
+that raise `OSError: wrong B-tree signature` — a bad transfer, not truncation.
+Replacements are arriving with those rows stripped out.
+
+| file | use it? | why |
+|---|---|---|
+| `lband_short_clean.h5` | **yes** | 463,625 rows, reads clean end to end |
+| `lband_short.h5` | no — superseded | 866,002 rows, but 46.65% of the stamps are unreadable |
+| `uhf_long.h5` | yes, for now | still has 6,000 bad rows (264,000–270,000); no clean version yet |
+| the other five | yes | never had corruption |
+
+The clean file's *rows* are a strict subset of the original's by hit `id` —
+same 26 columns, same schema, nothing altered, 402,377 unreadable rows removed.
+Only the stamp cubes were ever affected; every metadata column reads fine in
+both, which is why the Track A catalogues were always trustworthy. (Its Track A
+*survivors* are a different matter — see the results table below.)
+
+Two practical notes:
+
+- **It reads 4.4× faster in bulk** (103,662 vs 23,717 rows/s) because it is
+  stored uncompressed. Individual scattered stamp reads are a little slower
+  (~0.4 ms vs ~0.0 ms), so `explore.py stamps --sort snr` will feel marginally
+  less snappy while feature extraction gets much quicker.
+- **Don't let both versions into one run.** `track_b_features.py` with no
+  arguments globs `data/*.h5` and would ingest the old and the clean file as
+  two datasets covering the same hits. Name files explicitly, or move the
+  superseded original out of `data/` first.
+
+Track A has already been re-run on the clean file, so
+`catalogues/lband_short_clean_cat.parquet` exists and feature extraction will
+not stop for it (928 survivors, 0.200% — see the Track A results table for why
+that is not simply a subset of the original's 1,015).
+
+To re-run the pipeline on the corrected set:
+
+```bash
+mkdir -p data/superseded && mv data/lband_short.h5 data/superseded/
+python track_b_features.py                 # now picks up *_clean.h5 only
+python track_b_cluster.py                  # all_features.parquet
+```
 
 ## Setup
 
@@ -68,12 +113,26 @@ parquet — no need to re-run.
 |---|---:|---:|---:|
 | `lband_long` | 557,690 | 853 | 0.153 |
 | `lband_short` | 866,002 | 1,015 | 0.117 |
+| `lband_short_clean` | 463,625 | 928 | 0.200 |
 | `uhf_long` | 299,878 | 2,406 | 0.802 |
 | `uhf_short` | 208,774 | 1,870 | 0.896 |
 | `sband_long` | 36,132 | 47 | 0.130 |
 | `sband_short` | 38,576 | 46 | 0.119 |
 | `mk_sample_hits` | 15,119 | 906 | 5.992 |
 | **total** | **2,022,171** | **7,143** | **0.353** |
+
+The total is over the *original* seven files, so it still counts `lband_short`
+rather than `lband_short_clean`.
+
+**The clean file's survivors are not a subset of the original's.** Comparing by
+hit `id`: 922 survive in both, 93 survive only in the original — all 93 sat
+inside the corrupt block, so they never had a readable stamp and could not have
+reached Track B — and **6 survive only in the clean file**. Those 6 are new.
+The multi-beam coincidence cut counts how many beams a hit appears in, so
+deleting 46% of the rows changes the denominator and a handful of hits that
+previously looked like multi-beam RFI now look confined. Expect small
+population-dependent shifts like this whenever the input row set changes; it is
+the cut working as intended, not an inconsistency.
 
 Read the per-file `_cutflow.csv` before trusting any of it. The `flagged_alone`
 column shows what each cut catches on its own; `removed_here` shows what it adds
@@ -117,6 +176,9 @@ on `id`; anything else that pools files must do the same.
   than 150 s as not "viable for technosignature searching" when triaging the
   survey. Ours are a deliberate short-integration subset; report them separately
   from the `_long` files rather than pooling.
+- **`uhf_long.h5` still has no clean replacement.** Rows 264,000–270,000 (2.00%)
+  remain unreadable, so ~6,000 stamps are still lost there. Worth asking for a
+  re-copy of that one too, on the same terms as `lband_short_clean.h5`.
 - **Hits-per-beam steps at beams ~49/~55 — explained, benign.** One beam per
   target, filled from 0, and sparse sky has fewer targets. `python explore.py
   beams <file>` shows it. Catalogues now carry `n_beams_formed` and `beam_frac`

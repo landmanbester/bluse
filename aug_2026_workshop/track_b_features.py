@@ -270,6 +270,12 @@ def scan_bad_regions(data, n, probe=2000):
     hundred reads instead of re-reading the file, and the per-row fallback in
     the main loop catches anything a block probe misses.
 
+    PREFER data/lband_short_clean.h5 OVER data/lband_short.h5 -- the clean file
+    has those rows stripped and scans with zero bad blocks. This function is
+    still needed for uhf_long.h5, which has no clean replacement yet. Note that
+    probing every 2,000 rows over-skips at the edges of a bad region: the clean
+    file keeps 1,623 rows that this function discards.
+
     Returns a boolean mask, True where the row is expected to be readable.
     """
     ok = np.ones(n, dtype=bool)

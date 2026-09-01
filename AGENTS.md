@@ -37,7 +37,8 @@ aug_2026_workshop/
   track_b_features.py            Track B: feature extraction driver
   track_b_cluster.py             Track B: HDBSCAN clustering
   explorer/                      Cluster Bench: FastAPI + htmx tuning UI
-  data/                          7 HDF5 files + filtered_hits.csv (untracked)
+  data/                          HDF5 files + filtered_hits.csv (untracked).
+                                 Prefer *_clean.h5 -- see gotcha 7.
   catalogues/                    Track A output (.csv tracked, .parquet not)
   features/                      Track B feature matrices (untracked, ~350 MB)
   clusters/                      Track B clustering output
@@ -78,7 +79,8 @@ feature vector and an image.
 | File | Hits | Cube | Duration | Δf | Band |
 |---|---:|---|---:|---:|---|
 | `lband_long` | 557,690 | (n,1,57,120) | 286.0 s | 1.59 Hz | 855.7–1702.8 MHz |
-| `lband_short` | 866,002 | (n,1,24,120) | 120.4 s | 1.59 Hz | 856.0–1068.0 MHz |
+| `lband_short_clean` ✅ | 463,625 | (n,1,24,120) | 120.4 s | 1.59 Hz | 856.0–962.7 MHz |
+| `lband_short` ⛔ superseded | 866,002 | (n,1,24,120) | 120.4 s | 1.59 Hz | 856.0–1068.0 MHz |
 | `uhf_long` | 299,878 | (n,1,36,120) | 284.2 s | 1.01 Hz | 543.9–1080.0 MHz |
 | `uhf_short` | 208,774 | (n,1,15,120) | 118.4 s | 1.01 Hz | 544.0–679.8 MHz |
 | `sband_long` | 36,132 | (n,1,59,120) | 289.6 s | 1.63 Hz | 1968.8–2825.0 MHz |
@@ -163,19 +165,55 @@ across the whole delivery and stable between the HDF5 files and
    The default augmentation lists in the literature are written for galaxy images
    and are actively wrong here.
 
-7. **Two files have corrupt stamp cubes.** Verified by block-scanning `data`:
-   `lband_short.h5` rows **338,000–742,000** (404,000 rows, 46.65%) and
-   `uhf_long.h5` rows **264,000–270,000** (6,000 rows, 2.00%) raise
-   `OSError: wrong B-tree signature`. Each is a single contiguous mid-file
-   region with a readable tail — the signature of a bad transfer, not
-   truncation. **Metadata columns are unaffected**, so Track A (metadata-only)
-   is complete and correct; Track B loses those stamps and marks them
-   `stamp_ok=False`. Re-copying those two files would recover 410,000 hits.
-   `track_b_features.py:scan_bad_regions()` probes cheaply and skips them.
+7. **Corrupt stamp cubes — ALWAYS PREFER A `*_clean.h5` FILE WHERE ONE EXISTS.**
+   Verified by block-scanning `data`: `lband_short.h5` rows
+   **338,000–742,000** (46.65%) and `uhf_long.h5` rows **264,000–270,000**
+   (6,000 rows, 2.00%) raise `OSError: wrong B-tree signature`. Each is a
+   single contiguous mid-file region with a readable tail — the signature of a
+   bad transfer, not truncation. **Metadata columns are unaffected**, so Track
+   A (metadata-only) is complete and correct on either version; Track B loses
+   those stamps and marks them `stamp_ok=False`.
 
-8. **Compression.** The six band files are gzip-chunked at one stamp per chunk:
-   random access to individual stamps is cheap, bulk reads are CPU-bound on
-   decompression. `mk_sample_hits.h5` is uncompressed and contiguous.
+   | file | status |
+   |---|---|
+   | `lband_short_clean.h5` | **use this**; 463,625 rows, 0 bad blocks |
+   | `lband_short.h5` | superseded — 866,002 rows, 201/434 probes bad |
+   | `uhf_long.h5` | **still corrupt, no clean version yet** |
+   | the other five | never had corruption |
+
+   `lband_short_clean.h5` is a strict subset by `id`: 402,377 unreadable rows
+   stripped, all 26 datasets and the schema unchanged, `numTimesteps` still 24,
+   `numChannels` still 79–120, `incoherentPower` still all-zero. It recovers
+   1,623 rows *more* than skipping the block wholesale did, because
+   `scan_bad_regions()` probes every 2,000 rows and so over-skips at the edges.
+
+   **Hazard when re-running.** A bare `track_b_features.py` globs `data/*.h5`
+   and will ingest `lband_short.h5` *and* `lband_short_clean.h5` as two
+   datasets covering the same hits. `deduplicate()` keeps whichever file
+   yielded more rows, which is the clean one — but only by ~1,600 rows out of
+   463,625. Do not lean on that margin. **Name the files explicitly, or move
+   the superseded originals out of `data/`.**
+
+   Keep `scan_bad_regions()` regardless: `uhf_long.h5` still needs it.
+
+   **Track A survivors are not stable under a row-set change.** Re-running
+   Track A on the clean file gives 928 survivors against 1,015: 922 in both,
+   93 original-only (all inside the corrupt block, so they never had a stamp),
+   and **6 clean-only**. The multi-beam cut counts beams per hit, so removing
+   46% of the rows changes the denominator and a few hits stop looking like
+   multi-beam RFI. This is the cut behaving correctly — but it means survivor
+   sets from different row sets must not be compared hit-for-hit.
+
+8. **Compression differs between the original and clean deliveries, and it
+   inverts the access pattern.** The six original band files are gzip-chunked
+   at one stamp per chunk (`chunks=(1,1,24,120)`): random single-stamp access
+   is cheap, bulk reads are CPU-bound on decompression. `lband_short_clean.h5`
+   is **uncompressed** with `chunks=(128,1,3,30)`. Measured: sequential batched
+   reads **103,662 rows/s vs 23,717 (4.4× faster)**, which is what feature
+   extraction does; single random-row reads are ~0.4 ms against ~0.0 ms, so
+   `explore.py stamps` on scattered rows is slower. Expect extraction over the
+   clean file to be markedly quicker despite no compression.
+   `mk_sample_hits.h5` is uncompressed and contiguous.
 
 ## Conventions
 
@@ -218,8 +256,10 @@ original metadata plus `n_beams`, `n_obs_at_freq`, `log_snr`, `log_power`,
   their *minimum* sweep bandwidth. `f08_turning_bw_hz` is consequently
   unresolved for ~72% of hits (companion `f08_turning_bw_saturated` flag; the
   clusterer excludes it by default).
-- Extraction over all 2,022,171 hits takes ~7 min; 1,612,171 have usable
-  features (the shortfall is the corruption in gotcha 7).
+- Extraction over all 2,022,171 hits took ~7 min; 1,612,171 had usable features
+  (the shortfall was the corruption in gotcha 7). **These numbers predate
+  `lband_short_clean.h5`** — swapping it in recovers ~404,000 of those stamps,
+  so re-extract rather than trusting them.
 - Clustering follows GLOBULAR's iterative batching. **The batching is integral,
   not a memory workaround** — one large pass collapses to 2 clusters against 71
   batched on sband_short.
