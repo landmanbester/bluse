@@ -626,6 +626,26 @@ def labels_bin(run: str):
                     media_type="application/octet-stream")
 
 
+@app.get("/values.bin")
+def values_bin(key: str, col: str):
+    """
+    One feature column, normalised to [0,1], for colour-by-value.
+
+    This is what makes the rail's distance shares visible rather than tabular:
+    colouring by f02_abs_drift_n renders the zero-drift slab immediately, and
+    if colouring by f01_frequency_n reproduces the cluster structure, that is a
+    one-click finding.
+    """
+    ds = DATASETS.get(key)
+    if ds is None or col not in ds.columns:
+        return Response(status_code=404)
+    v = ds.raw[:, ds.columns.index(col)].astype(np.float32)
+    lo, hi = float(np.nanmin(v)), float(np.nanmax(v))
+    span = hi - lo if hi - lo > 1e-12 else 1.0
+    return Response(((v - lo) / span).astype(np.float32).tobytes(),
+                    media_type="application/octet-stream")
+
+
 @app.get("/hit", response_class=HTMLResponse)
 def hit(request: Request, key: str, i: int, run: str = ""):
     ds = DATASETS.get(key)

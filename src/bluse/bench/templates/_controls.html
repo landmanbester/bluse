@@ -43,6 +43,14 @@
       <option value="none">none — GLOBULAR literal</option>
     </select>
   </label>
+  <label class="field"><span>colour by</span>
+    <select id="colour-by" onchange="loadValues()">
+      <option value="" selected>cluster</option>
+      {% for f in features %}
+      <option value="{{ f.col }}">{{ f.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
   <label class="field"><span>embedding</span>
     <select id="embed-method" onchange="loadEmbedding()">
       <option value="pca" selected>PCA — instant</option>

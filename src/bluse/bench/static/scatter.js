@@ -22,6 +22,7 @@ let focused = null;   // cluster label isolated by clicking a table row
 let embSig = '';      // signature of the embedding currently on screen
 
 let emb = null, labels = null, prevRGB = null, curRGB = null;
+let values = null;   // Float32Array in [0,1], or null to colour by cluster
 let view = { x: 0, y: 0, k: 1 };
 let canvas, ctx, dpr = window.devicePixelRatio || 1;
 let anim = null, animT = 1, grid = null, hovered = -1, currentRun = '';
@@ -50,6 +51,14 @@ function toScreen(i) {
   const x = emb[i * 2], y = emb[i * 2 + 1];
   return [pad + (x * view.k + view.x) * (w - 2 * pad),
           h - pad - (y * view.k + view.y) * (h - 2 * pad)];
+}
+
+/* Exact inverse of toScreen, so nearest() can turn a pixel box into a range of
+ * grid cells. buildGrid() indexes by raw embedding coords in [0,1]. */
+function toData(sx, sy) {
+  const w = canvas.width, h = canvas.height, pad = 34 * dpr;
+  return [(((sx - pad) / (w - 2 * pad)) - view.x) / view.k,
+          (((h - pad - sy) / (h - 2 * pad)) - view.y) / view.k];
 }
 
 function draw() {
@@ -106,14 +115,48 @@ function draw() {
   }
 }
 
+/* Diverging ramp, blue -> grey -> orange, for colour-by-value. */
+function rampRGB(t) {
+  const c = Math.max(0, Math.min(1, t));
+  if (c < 0.5) {
+    const u = c * 2;
+    return [74 + (140 - 74) * u, 163 + (150 - 163) * u, 232 + (150 - 232) * u];
+  }
+  const u = (c - 0.5) * 2;
+  return [140 + (232 - 140) * u, 150 + (115 - 150) * u, 150 + (74 - 150) * u];
+}
+
 function buildRGB() {
   const n = emb.length / 2;
   const out = new Uint8Array(n * 3);
   for (let i = 0; i < n; i++) {
+    /* Colour by a raw feature value instead of by cluster. This is what makes
+     * the rail's distance shares visible rather than tabular: colouring by
+     * f02_abs_drift_n renders the zero-drift slab at once, and if colouring by
+     * f01_frequency_n reproduces the cluster structure, that is a finding. */
+    if (values && values.length === n) {
+      const [r, g, b] = rampRGB(values[i]);
+      out[i * 3] = r; out[i * 3 + 1] = g; out[i * 3 + 2] = b;
+      continue;
+    }
     const [r, g, b] = hexToRGB(colourFor(labels ? labels[i] : -1));
     out[i * 3] = r; out[i * 3 + 1] = g; out[i * 3 + 2] = b;
   }
   return out;
+}
+
+async function loadValues() {
+  const sel = document.getElementById('colour-by');
+  const col = sel ? sel.value : '';
+  if (!col) { values = null; curRGB = buildRGB(); draw(); return; }
+  setBusy(true);
+  try {
+    const res = await fetch('/values.bin?key=' + encodeURIComponent(window.DSKEY)
+                            + '&col=' + encodeURIComponent(col));
+    values = res.ok ? new Float32Array(await res.arrayBuffer()) : null;
+    curRGB = buildRGB();
+    draw();
+  } finally { setBusy(false); }
 }
 
 function animateRecolour() {
@@ -138,15 +181,38 @@ function buildGrid() {
   }
 }
 
+/* D-3: this was a full O(n) scan with a toScreen() per point on EVERY
+ * mousemove -- 35,000 coordinate transforms per mouse move -- while
+ * buildGrid() maintained a 90x90 index that nothing ever read. Now it reads
+ * it: convert the cursor's hit box to data space and walk only those cells. */
 function nearest(mx, my) {
   if (!emb) return -1;
-  let best = -1, bd = (14 * dpr) ** 2;
-  const n = emb.length / 2;
-  const stride = n > 120000 ? 2 : 1;
-  for (let i = 0; i < n; i += stride) {
-    const [sx, sy] = toScreen(i);
-    const d = (sx - mx) ** 2 + (sy - my) ** 2;
-    if (d < bd) { bd = d; best = i; }
+  const r = 14 * dpr;
+  let best = -1, bd = r * r;
+  if (!grid) {                       // index not built yet: fall back
+    const n = emb.length / 2;
+    for (let i = 0; i < n; i++) {
+      const [sx, sy] = toScreen(i);
+      const d = (sx - mx) ** 2 + (sy - my) ** 2;
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  }
+  const cells = 90;
+  const [x0, y0] = toData(mx - r, my - r);
+  const [x1, y1] = toData(mx + r, my + r);
+  const cx0 = Math.max(0, Math.floor(Math.min(x0, x1) * cells));
+  const cx1 = Math.min(cells - 1, Math.floor(Math.max(x0, x1) * cells));
+  const cy0 = Math.max(0, Math.floor(Math.min(y0, y1) * cells));
+  const cy1 = Math.min(cells - 1, Math.floor(Math.max(y0, y1) * cells));
+  for (let cy = cy0; cy <= cy1; cy++) {
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (const i of grid[cy * cells + cx]) {
+        const [sx, sy] = toScreen(i);
+        const d = (sx - mx) ** 2 + (sy - my) ** 2;
+        if (d < bd) { bd = d; best = i; }
+      }
+    }
   }
   return best;
 }
