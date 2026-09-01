@@ -7,16 +7,27 @@
 
   <div class="eyebrow">Feature weights</div>
   <p style="font-family:var(--mono);font-size:10px;color:var(--dimmer);margin:0 0 8px">
-    bars show each feature&#39;s raw spread (IQR), before scaling.
-    <b>robust</b> divides these out so every feature counts equally;
-    <b>none</b> leaves them as-is, so the widest bar dominates the metric.
+    bar = raw spread (IQR) before scaling; <b>robust</b> divides these out.
+    <b>share</b> = what the column actually contributes to the distance
+    HDBSCAN takes, against an equal share of
+    {{ '%.1f'|format(features[0].equal_pct if features else 0) }}%.
+    <b>tie</b> = largest repeated value, <b>clip</b> = fraction landing on
+    &plusmn;5.<br>
+    <span style="opacity:.75">The two share flags are ONE observation, not
+    two: shares sum to 1, so a column at 24% mechanically depresses every
+    other toward the lower bound. <b>knn</b> is reported but not
+    thresholded &mdash; no value for it had been measured when these rules
+    were written.</span>
   </p>
   {% for f in features %}
-  <label class="feat {% if f.iqr_rel > 0.75 %}dominant{% endif %}">
+  <label class="feat {% if f.flags %}flagged{% endif %}">
     <input type="checkbox" name="feat" value="{{ f.col }}" {% if f.on %}checked{% endif %}>
     <span class="name">{{ f.label }}</span>
     <span class="iqr">{{ '%.3f'|format(f.iqr_raw) }}{% if f.saturated %} <span class="flag">SAT {{ f.saturated|round|int }}%</span>{% endif %}</span>
     <span class="bar"><i style="width: {{ (f.iqr_rel * 100)|round(1) }}%"></i></span>
+    <span class="diag">share {{ '%.1f'|format(f.share_pct) }}%<span
+      class="dim"> / knn {{ '%.1f'|format(f.share_knn_pct) }}%</span>
+      · {{ f.n_distinct }} vals{% if f.max_tie_fraction > 0.01 %} · tie {{ '%.0f'|format(f.tie_pct) }}%{% endif %}{% if f.clip_frac > 0.0001 %} · clip {{ '%.1f'|format(f.clip_pct) }}%{% endif %}{% for fl in f.flags %} <span class="flag">{{ fl }}</span>{% endfor %}</span>
   </label>
   {% endfor %}
   <div class="feat-actions">

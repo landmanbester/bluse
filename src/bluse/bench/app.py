@@ -49,6 +49,7 @@ from .. import features as F
 from .. import paths
 # scale() lives in diagnostics so the Bench and the CLI cannot drift
 # apart on the one thing that matters most to the metric.
+from .. import diagnostics
 from .. import metrics
 from ..diagnostics import scale
 
@@ -108,6 +109,7 @@ class Dataset:
     raw: np.ndarray                  # (n, n_feat) normalised, pre-scaling
     columns: list[str]
     embedding: dict = field(default_factory=dict)   # method -> (n,2) float32
+    scaler_stats: dict = field(default_factory=dict)  # full-population med/IQR
 
 
 @dataclass
@@ -163,13 +165,28 @@ def load_dataset(name, sample, seed):
     good = np.isfinite(X).all(axis=1)
     df, X = df[good].reset_index(drop=True), X[good]
 
+    # D-4: fit the scaling statistics on the FULL population, then sample.
+    # GLOBULAR's requirement that scaling be global and pre-batching is already
+    # satisfied upstream -- features.normalise() fits its transforms globally at
+    # extraction time -- so this is the second stage only.
+    #
+    # Be honest about what this fixes. Measured, a 35k-row IQR matches the
+    # 1,281,878-row population to better than 1.1% on 14 of 15 columns, worst
+    # 6.4%. It is NOT why a Bench configuration fails to reproduce in
+    # bluse-cluster. That is because the Bench clusters 35k rows and the CLI
+    # clusters 1.28M, and because two runs of one configuration at different
+    # seeds already agree at only ARI 0.024.
+    q75f, q25f = np.percentile(X, [75, 25], axis=0)
+    scaler_stats = {"median": np.median(X, axis=0), "iqr": q75f - q25f}
+
     if sample and len(df) > sample:
         idx = np.sort(np.random.default_rng(seed).choice(len(df), sample,
                                                          replace=False))
         df, X = df.iloc[idx].reset_index(drop=True), X[idx]
 
     keep = [c for c in PROV if c in df.columns]
-    ds = Dataset(key=key, name=name, df=df[keep].copy(), raw=X, columns=cols)
+    ds = Dataset(key=key, name=name, df=df[keep].copy(), raw=X, columns=cols,
+                 scaler_stats=scaler_stats)
     DATASETS[key] = ds
     return ds
 
@@ -375,22 +392,31 @@ def pick_dataset(request: Request, file: str = Form(...),
     # IQR is exactly 1.000 and the bars would all be equal. What the bars
     # actually show is how unequal the columns are BEFORE scaling, i.e. what
     # the scaling control is there to fix.
-    q75r, q25r = np.percentile(ds.raw, [75, 25], axis=0)
-    iqr_raw = q75r - q25r
+    # The raw IQR bar stays -- it answers "how unequal are the columns before
+    # scaling", which is what the scaling control exists to fix. It cannot
+    # answer what each column CONTRIBUTES to the distance HDBSCAN takes, and
+    # that is where the defects are, so the audit supplies the rest.
+    kinds = {c + "_n": k for c, k in F.column_kinds().items()}
+    rows = diagnostics.audit(ds.raw, ds.columns, scaling="robust",
+                             kinds=kinds, min_samples=8)
 
     sat = {}
     if "f08_turning_bw_saturated" in ds.df.columns:
         sat["f08_turning_bw_hz_n"] = float(ds.df.f08_turning_bw_saturated.mean() * 100)
 
+    iqr_max = max((r["iqr_raw"] for r in rows), default=1.0) or 1.0
     feats = []
-    for i, c in enumerate(ds.columns):
+    for r in rows:
         feats.append({
-            "col": c,
-            "label": c[:-2],
-            "iqr_raw": float(iqr_raw[i]),
-            "iqr_rel": float(iqr_raw[i] / max(iqr_raw.max(), 1e-12)),
-            "saturated": sat.get(c),
-            "on": not c.startswith("f08_"),
+            **r,
+            "iqr_rel": float(r["iqr_raw"] / iqr_max),
+            "saturated": sat.get(r["col"]),
+            "on": not r["col"].startswith("f08_"),
+            "share_pct": 100.0 * r["share_global"],
+            "share_knn_pct": 100.0 * r["share_knn"],
+            "equal_pct": 100.0 * r["equal_share"],
+            "tie_pct": 100.0 * r["max_tie_fraction"],
+            "clip_pct": 100.0 * r["clip_frac"],
         })
     return templates.TemplateResponse(request, "_controls.html", {
         "ds": ds, "features": feats,
