@@ -14,6 +14,8 @@
   <div class="stat"><div class="k">families</div>
     <div class="v">{{ '%.0f'|format(f.k_mean) }}<span class="sub">
       {{ f.k_min }}–{{ f.k_max }}</span></div></div>
+  <div class="stat"><div class="k">family null</div>
+    <div class="v">{{ '%.3f'|format(f.null) }}</div></div>
   <div class="stat"><div class="k">time</div>
     <div class="v">{{ '%.1f'|format(seconds) }}<span class="sub">s</span></div></div>
 </div>

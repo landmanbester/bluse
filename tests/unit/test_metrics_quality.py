@@ -14,9 +14,11 @@ def test_narrow_frac_matches_the_planted_share():
 def test_narrow_frac_reported_at_both_thresholds():
     labels, df = fixtures.synthetic_labelled(n=600, seed=0)
     q = M.quality(labels, df)
-    assert set(q["narrow_frac_at"]) == {0.1, 1.0}
-    assert q["narrow_frac_at"][1.0] == 0.20
-    assert q["narrow_frac_at"][0.1] == 0.0
+    # String keys, so the dict survives the JSON round-trip into
+    # <tag>_metrics.json without float-key comparison brittleness.
+    assert set(q["narrow_frac_at"]) == {"0.1", "1"}
+    assert q["narrow_frac_at"]["1"] == 0.20
+    assert q["narrow_frac_at"]["0.1"] == 0.0
 
 
 def test_permuting_labels_destroys_the_narrow_share():

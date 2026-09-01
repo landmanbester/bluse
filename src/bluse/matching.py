@@ -23,13 +23,18 @@ so one exact implementation serves the Bench interactively and the CLI offline.
 A k-NN-graph approximation was measured at 75.8 s for 80,000 -- slower than
 exact Ward and strictly worse -- and is not used.
 
-CAVEAT, and it belongs in any write-up of the first family taxonomy: Ward runs
-on centroids in the SCALED feature space, and that space still carries the 14x
-distance-share spread that the contribution-equalising scaling work has not yet
-fixed. With x03_channel_offset at 24.3% and f07_kurt_bw_corr at 13.1%, families
-are grouped substantially by channel offset and by a clipped correlation
-coefficient. The first taxonomy is provisional and must be re-derived once that
-scaling lands.
+CAVEAT, and it belongs in any write-up of the first family taxonomy: the cut
+is a granularity dial (see derive_cut_pct), so the number of families is a
+choice rather than a discovery. Treat the first taxonomy as provisional for
+that reason.
+
+An earlier version of this caveat blamed the scaled feature space instead,
+naming x03_channel_offset at 24.3% and f07_kurt_bw_corr at 13.1% of the global
+distance share. That was the wrong statistic: measured on k-NN pairs -- which
+is what HDBSCAN actually responds to -- x03 contributes 7.4% against an equal
+share of 6.7%, i.e. it is already well behaved locally. The column the local
+measurement does indict is f09_temporal_skew, at 15.5% local against 6.7%
+equal, and benign on every global statistic.
 """
 
 from __future__ import annotations
@@ -56,6 +61,28 @@ def derive_cut_pct(heights, pct=50):
     """
     Cut at a percentile of the Ward merge heights. THE DEFAULT.
 
+    READ THIS FIRST: this is a GRANULARITY DIAL, not a structure-sensitive cut.
+    A dendrogram over k clusters has k-1 merges, and cutting at the p-th
+    percentile of their heights performs the lowest p% of them, so it returns
+    approximately k(1 - p/100) groups REGARDLESS of whether the data has any
+    structure. Verified on pure 15-D Gaussian noise:
+
+        k=72   -> p25 54, p50 36, p90 8      (predicted 54 / 36 / 7)
+        k=2162 -> p25 1621, p50 1081, p90 217 (predicted 1622 / 1081 / 216)
+
+    and our own real runs sit exactly on that line: 2,162 -> 1,081 and
+    72 -> 36, both k/2 to within rounding. So `pct=50` means "halve the number
+    of groups", and nothing more.
+
+    That is a defensible default and it demonstrably works -- see the
+    reproducibility table below -- but two consequences matter. It is
+    scale-invariant, so the 5.26x per-file drift-lattice spread cannot move it
+    and the rule transfers across files unchanged. It is also
+    STRUCTURE-invariant, which is the property to worry about: it will halve
+    the group count on uhf_long too, whatever that dendrogram looks like.
+    Prefer `n_families=` when you know the granularity you want; `pct` is kept
+    because it is what the sweep below was measured against.
+
     Chosen by measurement, after two other rules were tried and failed:
 
       nearest-neighbour percentile (the first thing specified). Wrong units.
@@ -71,9 +98,9 @@ def derive_cut_pct(heights, pct=50):
         collapsed 2,162 leaf clusters into 4 families spanning the whole band,
         taking the narrow-cluster share from 6.820% to 0.000%.
 
-    Percentiles of the merge-height distribution behave, and p50 is where the
-    reproducibility gain peaks. Measured on sband_short, 3 seeds, membership
-    ARI and narrow-cluster share:
+    Percentiles behave predictably where the other two rules did not, and p50
+    is where the reproducibility gain peaks for eom. Measured on sband_short,
+    3 seeds, membership ARI and narrow-cluster share:
 
                         clusters    p25      p50      p90
         eom   ARI         0.0279  0.2137   0.5190   0.4031
@@ -87,9 +114,21 @@ def derive_cut_pct(heights, pct=50):
     it peaks near p50 and falls by p90, because past some point matching fuses
     populations that are genuinely distinct.
 
-    For leaf the same operation helps much less and costs more, which is the
-    real eom-vs-leaf trade-off: leaf wins on coherence (6.820% against 0.776%),
-    eom-plus-matching wins on reproducibility (0.519 against 0.108).
+    Those columns compare the two methods at DIFFERENT granularities, though,
+    because k differs by 30x. Matched at equal family count the picture changes
+    and both apparent advantages turn out to be granularity effects pointing in
+    opposite directions:
+
+        target families    eom ARI / narrow%     leaf ARI / narrow%
+                    20       0.5189 / 0.567       0.4524 / 0.000
+                    36       0.5190 / 0.670       0.4888 / 0.194
+                    72       0.0332 / 0.776       0.4170 / 0.774
+
+    So the 4.8x reproducibility gap largely evaporates at matched count (0.519
+    against 0.489 at 36), and leaf's 8.8x coherence advantage evaporates too --
+    coarsening leaf to eom's granularity takes its narrow share from 6.820% to
+    0.194%, BELOW eom's 0.670%. leaf's coherence is a property of its fine
+    granularity, not of the extraction method.
     """
     h = np.asarray(heights, dtype=np.float64)
     if not len(h):

@@ -51,3 +51,41 @@ def test_epoch_trace_arithmetic():
     assert rows[1]["removed"] == 4240 - 59
     assert rows[3]["removed"] == 0
     assert rows[3]["pct_of_original"] == 0.0
+
+
+def test_coarsening_null_is_near_zero_for_arbitrary_grouping():
+    """
+    The control for the headline family-ARI result.
+
+    Matching's default cut returns about k/2 groups regardless of structure, so
+    a sceptic asks whether coarsening alone raises agreement. Permuting the
+    cluster -> family map preserves the coarsening and destroys the
+    correspondence; ARI's chance correction should leave it at zero.
+    """
+    rng = np.random.default_rng(0)
+    n = 900
+    cl_runs, fam_runs = [], []
+    for seed in range(3):
+        r = np.random.default_rng(seed)
+        cl = r.integers(0, 60, n).astype(np.int32)
+        fam = (cl // 2).astype(np.int32)      # a genuine 2:1 coarsening
+        cl_runs.append(cl)
+        fam_runs.append(fam)
+    null = M.coarsening_null(cl_runs, fam_runs, seed=0)
+    assert abs(null) < 0.05
+
+
+def test_coarsening_null_leaves_a_real_correspondence_detectable():
+    """A shared coarsening of a SHARED clustering must beat its own null."""
+    import itertools
+
+    from sklearn.metrics import adjusted_rand_score
+    rng = np.random.default_rng(1)
+    cl = rng.integers(0, 60, 900).astype(np.int32)
+    fam = (cl // 2).astype(np.int32)
+    runs = [cl.copy() for _ in range(3)]
+    fams = [fam.copy() for _ in range(3)]
+    real = np.mean([adjusted_rand_score(a, b)
+                    for a, b in itertools.combinations(fams, 2)])
+    assert real == 1.0
+    assert M.coarsening_null(runs, fams, seed=0) < real

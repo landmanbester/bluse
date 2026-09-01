@@ -127,11 +127,19 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
             flags.append("tie")
         if clip_frac > CLIP_FLAG:
             flags.append("clip")
-        # share_global carries the threshold because it is the statistic
-        # actually measured. share_knn is reported but NOT thresholded: no
-        # value for it had been measured when these rules were written, and
-        # inventing a bound then would have been exactly the unverified-claim
-        # pattern this work exists to correct.
+        # share_global carries the threshold because it was the statistic
+        # actually measured when these rules were written. share_knn is
+        # reported but NOT thresholded: no value for it existed then, and
+        # inventing a bound would have been the unverified-claim pattern this
+        # work exists to correct.
+        #
+        # SINCE MEASURED, and the flag is now known to be the weaker signal:
+        # on sband_short x03_channel_offset is 24.3% global but only 7.4%
+        # local, while f09_temporal_skew is 6.7% global and 15.5% local. HDBSCAN
+        # responds to local density, so share_knn is the more relevant
+        # statistic and should become primary once thresholds are calibrated.
+        # Until then the rail caption warns readers to prefer knn where the two
+        # disagree.
         #
         # The two share flags are ONE observation, not two: shares sum to 1, so
         # a column at 24% mechanically depresses every other toward the lower

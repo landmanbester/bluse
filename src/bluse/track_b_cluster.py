@@ -484,8 +484,6 @@ def main():
               f"membership ARI {q['stability']['ari_restricted']:.4f}, "
               f"composite {q['stability']['ari_composite']:.4f}, "
               f"noise agreement {q['stability']['noise_agreement']:.4f}")
-    # narrow_frac_at is keyed by float, which json cannot serialise as a key.
-    q["narrow_frac_at"] = {str(k): v for k, v in q["narrow_frac_at"].items()}
     mpath = os.path.join(args.outdir, f"{tag}_metrics.json")
     with open(mpath, "w") as fh:
         json.dump(q, fh, indent=2, default=float)

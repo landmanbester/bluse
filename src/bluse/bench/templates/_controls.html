@@ -13,11 +13,15 @@
     {{ '%.1f'|format(features[0].equal_pct if features else 0) }}%.
     <b>tie</b> = largest repeated value, <b>clip</b> = fraction landing on
     &plusmn;5.<br>
-    <span style="opacity:.75">The two share flags are ONE observation, not
-    two: shares sum to 1, so a column at 24% mechanically depresses every
-    other toward the lower bound. <b>knn</b> is reported but not
-    thresholded &mdash; no value for it had been measured when these rules
-    were written.</span>
+    <span style="opacity:.75"><b>Flags use the GLOBAL share. Where knn differs
+    sharply from it, prefer knn</b> &mdash; HDBSCAN responds to local density,
+    not to global spread. Measured: <code>x03_channel_offset</code> is 24.3%
+    global against 7.4% local, so its <code>share-high</code> flag overstates
+    the problem; <code>f09_temporal_skew</code> is 6.7% global against 15.5%
+    local and carries no flag at all. knn is deliberately unthresholded until
+    it is calibrated.<br>The two share flags are ONE observation, not two:
+    shares sum to 1, so a column at 24% mechanically depresses every other
+    toward the lower bound.</span>
   </p>
   {% for f in features %}
   <label class="feat {% if f.flags %}flagged{% endif %}">

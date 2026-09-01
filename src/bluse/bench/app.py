@@ -592,25 +592,31 @@ async def do_stability(request: Request):
              epochs=int(form.get("epochs", 8)),
              batch=int(form.get("batch", 3000)))
 
-    def run_fn(seed):
-        labels, _, _, _ = cluster(ds, cols, p["scaling"], p["mode"], p["mcs"],
-                                  p["ms"], p["epochs"], p["batch"], seed,
-                                  p["csm"])
-        return labels
-
+    # Cluster ONCE per seed and derive both statistics from the same run. The
+    # first version called cluster() separately for the cluster-level and
+    # family-level sweeps, i.e. 2N runs where N does, on the slowest route in
+    # the tool.
     t0 = time.time()
-    s_cl = metrics.stability(run_fn, seeds=tuple(range(n_seeds)))
+    cached = {}
 
+    def _run(seed):
+        if seed not in cached:
+            labels, X, _, _ = cluster(ds, cols, p["scaling"], p["mode"],
+                                      p["mcs"], p["ms"], p["epochs"],
+                                      p["batch"], seed, p["csm"])
+            cached[seed] = (labels, matching.match(labels, X)[0])
+        return cached[seed]
+
+    seeds = tuple(range(n_seeds))
+    s_cl = metrics.stability(lambda sd: _run(sd)[0], seeds=seeds)
     # The same question one level up. Cluster ids are batch artefacts, so the
     # interesting number is whether FAMILIES reproduce where clusters do not.
-    def run_fam(seed):
-        labels, X, _, _ = cluster(ds, cols, p["scaling"], p["mode"], p["mcs"],
-                                  p["ms"], p["epochs"], p["batch"], seed,
-                                  p["csm"])
-        fam, _ = matching.match(labels, X)
-        return fam
-
-    s_fam = metrics.stability(run_fam, seeds=tuple(range(n_seeds)))
+    s_fam = metrics.stability(lambda sd: _run(sd)[1], seeds=seeds)
+    # Coarsening alone does not inflate ARI -- verified, two independent random
+    # partitions coarsened the same way score -0.00003 -- but the headline
+    # metric should not be the only one without a control.
+    s_fam["null"] = metrics.coarsening_null(
+        [cached[sd][0] for sd in seeds], [cached[sd][1] for sd in seeds])
     elapsed = time.time() - t0
     return templates.TemplateResponse(request, "_stability.html", {
         "s": s_cl, "f": s_fam, "params": p, "seconds": elapsed,

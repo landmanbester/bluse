@@ -68,6 +68,13 @@ def _enrichment(labels, weak):
     min_cluster_size = 4 only a FULLY confined cluster clears -- 3-of-4 gives
     p ~ 1.2e-4 and fails. So enrichment must not be compared across
     configurations with different min_cluster_size.
+
+    NOTE ON DENOMINATORS: the hypergeometric test runs over the LABELLED rows
+    of a cluster, `(labels == c) & known`, while the returned fraction counts
+    each significant cluster's FULL size. That is deliberate -- the metric is a
+    fraction of clustered hits, matching narrow_frac's scale -- but it means a
+    cluster that is 90% unlabelled contributes its whole size on the strength
+    of a test over a tenth of it.
     """
     from scipy.stats import hypergeom
 
@@ -127,18 +134,21 @@ def quality(labels, df, *, narrow_mhz=NARROW_MHZ, n_perm=5, seed=0):
                    narrow_enrichment=float("nan"), narrow_clusters=0,
                    median_span_mhz=float("nan"), ami=float("nan"),
                    enrichment=float("nan"),
-                   narrow_frac_at={t: float("nan") for t in narrow_mhz})
+                   narrow_frac_at={f"{t:g}": float("nan")
+                                   for t in narrow_mhz})
         return out
 
+    # String keys: float keys survive neither a JSON round-trip nor an equality
+    # comparison after one, and <tag>_metrics.json carries this dict.
     thresholds = tuple(narrow_mhz)
     at = {}
     for t in thresholds:
         hits, n_cl = _narrow(labels, freq, t)
-        at[t] = hits / n_clustered
+        at[f"{t:g}"] = hits / n_clustered
         if t == thresholds[-1]:
             out["narrow_clusters"] = n_cl
     out["narrow_frac_at"] = at
-    out["narrow_frac"] = at[thresholds[-1]]
+    out["narrow_frac"] = at[f"{thresholds[-1]:g}"]
 
     # Null for the headline, because every other metric here has one. Small
     # clusters are narrow by chance more often than large ones, and leaf's
@@ -255,3 +265,52 @@ def epoch_trace(alive_after, n_total):
         })
         prev = alive
     return rows
+
+
+def coarsening_null(cluster_runs, family_runs, seed=0):
+    """
+    Does coarsening inflate family ARI on its own?
+
+    The family-level ARI is the headline result, and it was the only metric
+    without a control -- the same asymmetry that let AMI through unchallenged
+    for a round. The worry is concrete: matching's default cut is a granularity
+    dial that returns about k/2 groups regardless of structure, so a sceptic
+    would ask whether merely halving the group count raises agreement.
+
+    It does not. Permuting the cluster -> family assignment while preserving
+    the family size distribution destroys the correspondence but keeps the
+    coarsening, so this returns what family ARI would be if matching grouped
+    clusters arbitrarily. Independently verified on structureless data: two
+    random partitions into 72 clusters, each coarsened by Ward at p50, score
+    cluster ARI 0.00005 and family ARI -0.00003. ARI's chance correction
+    handles it.
+
+    Returns the mean pairwise restricted ARI over the permuted families.
+    """
+    import itertools
+
+    from sklearn.metrics import adjusted_rand_score
+
+    rng = np.random.default_rng(seed)
+    shuffled = []
+    for cl, fam in zip(cluster_runs, family_runs):
+        cl = np.asarray(cl)
+        fam = np.asarray(fam)
+        ids = np.unique(cl[cl >= 0])
+        if not len(ids):
+            shuffled.append(fam)
+            continue
+        # One family id per cluster, then permute that mapping.
+        per_cluster = np.array([fam[cl == c][0] for c in ids])
+        rng.shuffle(per_cluster)
+        out = np.full(len(cl), -1, dtype=np.int32)
+        m = cl >= 0
+        out[m] = per_cluster[np.searchsorted(ids, cl[m])]
+        shuffled.append(out)
+
+    vals = []
+    for a, b in itertools.combinations(shuffled, 2):
+        both = (a >= 0) & (b >= 0)
+        if both.sum() > 1:
+            vals.append(adjusted_rand_score(a[both], b[both]))
+    return float(np.mean(vals)) if vals else float("nan")

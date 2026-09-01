@@ -43,13 +43,24 @@ def test_is_deterministic():
     assert np.array_equal(a, b)
 
 
-def test_default_pct_rule_merges_monotonically():
-    """A higher percentile must never yield more families."""
-    labels, X = fixtures.synthetic_centroid_space(seed=0)
-    counts = [matching.match(labels, X, pct=p)[1]["n_families"]
-              for p in (10, 25, 50, 75, 90)]
-    assert counts == sorted(counts, reverse=True)
-    assert counts[-1] >= 1
+def test_pct_rule_is_a_granularity_dial_not_a_structure_detector():
+    """
+    Pin the property that matters about the default rule: it returns about
+    k(1 - pct/100) groups REGARDLESS of structure.
+
+    The previous version of this test asserted only that the family count is
+    monotone in pct, which holds by construction on any input including pure
+    noise -- a test that cannot fail. This one asserts the actual arithmetic,
+    on data with NO family structure, so it fails if the rule ever stops being
+    a granularity dial (which would be an improvement, and should be noticed).
+    """
+    rng = np.random.default_rng(0)
+    k, per = 60, 10
+    labels = np.repeat(np.arange(k), per).astype(np.int32)
+    X = rng.normal(size=(k * per, 6))          # structureless
+    for pct in (25, 50, 75):
+        n_fam = matching.match(labels, X, pct=pct)[1]["n_families"]
+        assert abs(n_fam - round(k * (1 - pct / 100))) <= 2, (pct, n_fam)
 
 
 def test_cut_source_is_reported():
