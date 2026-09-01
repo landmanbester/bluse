@@ -54,15 +54,39 @@ app = FastAPI(title="Cluster Bench")
 app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))
 
-# Must match COLOURS in static/scatter.js so a table swatch matches its points.
+# A run routinely produces 200+ clusters. Cycling a palette over all of them
+# turns the scatter into confetti in which the 15,000-point RFI family and a
+# 4-point singleton look equally important. So colour is assigned by RANK, not
+# by label: the TOP_N largest clusters get distinct hues, everything smaller is
+# drawn in one muted grey. The eye then reads the structure that matters and
+# the long tail stays visible as texture. Must match static/scatter.js.
 COLOURS = [
     "#e8734a", "#4aa3e8", "#7fc96b", "#c77dd6", "#e8c34a", "#5fd0c0",
     "#e06b8b", "#8f9ce8", "#b8d24a", "#4ac2e8", "#e89a4a", "#9ad67f",
-    "#d67fae", "#7ad6c2", "#e8e04a", "#6b8fe0", "#d6a17f", "#4ae89a",
-    "#e84a6b", "#a4e84a",
 ]
-templates.env.globals["colour"] = lambda lab: (
-    "#39424f" if lab < 0 else COLOURS[abs(int(lab)) % len(COLOURS)])
+TOP_N = len(COLOURS)
+NOISE_COLOUR = "#39424f"
+MINOR_COLOUR = "#5c6779"
+
+
+def colour_for(lab, rank=None):
+    """Colour of a cluster given the rank map {label: position by size}."""
+    if lab is None or int(lab) < 0:
+        return NOISE_COLOUR
+    if rank is None:
+        return COLOURS[abs(int(lab)) % len(COLOURS)]
+    i = rank.get(int(lab))
+    return COLOURS[i] if i is not None and i < TOP_N else MINOR_COLOUR
+
+
+templates.env.globals["colour"] = colour_for
+
+# Cache-buster for the static assets: without it a browser happily serves a
+# stale app.css against a freshly restarted server, which looks exactly like a
+# CSS change that "did not work".
+templates.env.globals["assetv"] = lambda: str(int(os.path.getmtime(
+    os.path.join(HERE, "static", "app.css")) +
+    os.path.getmtime(os.path.join(HERE, "static", "scatter.js"))))
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +110,7 @@ class Run:
     summary: pd.DataFrame
     stats: dict
     params: dict
+    rank: dict = field(default_factory=dict)   # cluster label -> size rank
 
 
 DATASETS: dict[str, Dataset] = {}
@@ -239,6 +264,12 @@ def summarise(df, labels):
             "beams": float(d.n_beams.median()),
             "obs": int(d.obsid.nunique()),
         })
+    cols = ["cluster", "n", "rfi_pct", "freq", "span", "snr", "beams", "obs"]
+    if not rows:
+        # Every point is noise. Without the explicit columns the empty frame has
+        # none, and sort_values("n") raises KeyError before the caller's
+        # all-noise message can ever be rendered.
+        return pd.DataFrame(columns=cols)
     return pd.DataFrame(rows).sort_values("n", ascending=False)
 
 
@@ -332,6 +363,7 @@ async def do_cluster(request: Request):
         summary = summarise(ds.df, labels)
         noise = labels == -1
         conf = noise & (ds.df.n_beams.to_numpy() <= 4)
+        rank = {int(c): i for i, c in enumerate(summary["cluster"])}
         RUNS[sig] = Run(sig, labels, summary, {
             "n": len(labels),
             "n_clusters": int(len(summary)),
@@ -340,7 +372,7 @@ async def do_cluster(request: Request):
             "confined": int(conf.sum()),
             "seconds": elapsed,
             "n_features": len(cols),
-        }, p)
+        }, p, rank)
         if sig in HISTORY:
             HISTORY.remove(sig)
         HISTORY.insert(0, sig)
@@ -348,12 +380,15 @@ async def do_cluster(request: Request):
 
     run = RUNS[sig]
     resp = templates.TemplateResponse(request, "_results.html", {
-        "run": run, "cached": cached,
-        "summary": run.summary.head(25).to_dict("records"),
+        "run": run, "cached": cached, "rank": run.rank,
+        "summary": run.summary.head(40).to_dict("records"),
         "history": [RUNS[h] for h in HISTORY if h in RUNS],
         "key": key,
     })
-    resp.headers["HX-Trigger"] = json.dumps({"clusterDone": {"run": run.run_id}})
+    # The client needs the size order to colour by rank; 12 ints is cheap.
+    top = [int(c) for c in run.summary["cluster"].head(TOP_N)]
+    resp.headers["HX-Trigger"] = json.dumps(
+        {"clusterDone": {"run": run.run_id, "top": top}})
     return resp
 
 

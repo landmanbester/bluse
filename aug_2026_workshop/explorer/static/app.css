@@ -31,6 +31,12 @@
 
 body {
   margin: 0;
+  /* The app owns the whole viewport: nothing here should ever page-scroll, so
+     the rail and the results panel scroll inside themselves instead. */
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
@@ -67,7 +73,10 @@ header .spacer { flex: 1; }
 main {
   display: grid;
   grid-template-columns: var(--rail) 1fr;
-  height: calc(100vh - 49px);
+  /* flex:1 rather than calc(100vh - header) -- the old form hard-coded a 49px
+     header that is actually 50px with its border, which page-scrolled by 1px. */
+  flex: 1;
+  min-height: 0;
 }
 
 #rail {
@@ -215,6 +224,13 @@ button.ghost:hover { color: var(--text); border-color: var(--dim); }
   text-transform: uppercase; color: var(--dim);
 }
 
+#hud .focus {
+  color: var(--accent);
+  border-left: 1px solid var(--line);
+  padding-left: 10px; margin-left: 2px;
+}
+#hud .focus .dim { color: var(--dimmer); }
+
 #tip {
   position: absolute; pointer-events: none;
   background: rgba(11,14,19,0.96);
@@ -245,7 +261,7 @@ button.ghost:hover { color: var(--text); border-color: var(--dim); }
 #results {
   border-top: 1px solid var(--line);
   background: var(--panel);
-  max-height: 46vh; overflow-y: auto;
+  max-height: 38vh; overflow-y: auto;
 }
 
 .stats {
@@ -272,6 +288,9 @@ th {
 }
 th:first-child, td:first-child { text-align: left; }
 td {
+  /* Right-aligned to match the headers; a number sitting at the far left of a
+     150px cell reads as belonging to the wrong column. */
+  text-align: right;
   padding: 5px 12px; font-size: 11px;
   font-variant-numeric: tabular-nums;
   border-bottom: 1px solid var(--line-soft);

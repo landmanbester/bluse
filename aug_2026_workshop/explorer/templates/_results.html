@@ -22,7 +22,7 @@
   <tbody>
   {% for r in summary %}
     <tr onclick="focusCluster({{ r.cluster }})" style="cursor:pointer">
-      <td><span class="swatch" style="background:{{ colour(r.cluster) }}"></span>{{ r.cluster }}</td>
+      <td><span class="swatch" style="background:{{ colour(r.cluster, rank) }}"></span>{{ r.cluster }}</td>
       <td>{{ '{:,}'.format(r.n) }}</td>
       <td class="pct">{{ r.rfi_pct|round|int }}%</td>
       <td>{{ '%.4f'|format(r.freq) }}</td>

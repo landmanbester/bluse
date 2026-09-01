@@ -5,15 +5,20 @@
  * and a recolour here. Colours crossfade over ~260 ms so you can see which
  * points moved between clusters rather than just seeing a new picture. */
 
-/* 20 hues chosen to stay separable on the slate background. Kept in step with
- * PALETTE in app.py so a table swatch matches its points. */
+/* A run routinely yields 200+ clusters. Cycling a palette over all of them
+ * makes a 15,000-point RFI family and a 4-point singleton look equally
+ * important. Colour is therefore assigned by RANK: the 12 largest clusters get
+ * distinct hues, the long tail is drawn in one muted grey so it reads as
+ * texture rather than noise. Kept in step with COLOURS in app.py so a table
+ * swatch matches its points. */
 const COLOURS = [
   '#e8734a', '#4aa3e8', '#7fc96b', '#c77dd6', '#e8c34a', '#5fd0c0',
-  '#e06b8b', '#8f9ce8', '#b8d24a', '#4ac2e8', '#e89a4a', '#9ad67f',
-  '#d67fae', '#7ad6c2', '#e8e04a', '#6b8fe0', '#d6a17f', '#4ae89a',
-  '#e84a6b', '#a4e84a'
+  '#e06b8b', '#8f9ce8', '#b8d24a', '#4ac2e8', '#e89a4a', '#9ad67f'
 ];
 const NOISE = '#39424f';
+const MINOR = '#5c6779';
+let rank = null;   // Map(label -> size rank), set by loadLabels
+let focused = null;   // cluster label isolated by clicking a table row
 
 let emb = null, labels = null, prevRGB = null, curRGB = null;
 let view = { x: 0, y: 0, k: 1 };
@@ -21,7 +26,12 @@ let canvas, ctx, dpr = window.devicePixelRatio || 1;
 let anim = null, animT = 1, grid = null, hovered = -1, currentRun = '';
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-function colourFor(l) { return l < 0 ? NOISE : COLOURS[Math.abs(l) % COLOURS.length]; }
+function colourFor(l) {
+  if (l < 0) return NOISE;
+  if (!rank) return COLOURS[Math.abs(l) % COLOURS.length];
+  const i = rank.get(l);
+  return i === undefined ? MINOR : COLOURS[i];
+}
 
 function hexToRGB(h) {
   return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
@@ -50,11 +60,19 @@ function draw() {
   const n = emb.length / 2;
   const r = Math.max(1, 1.6 * dpr * Math.min(2.2, Math.sqrt(view.k)));
 
-  /* Noise first so clustered points sit on top of it. */
-  for (let pass = 0; pass < 2; pass++) {
+  /* Three passes, back to front: noise, then the muted long tail, then the
+   * ranked clusters on top -- otherwise a 15,000-point family is buried under
+   * whatever happens to be drawn last. */
+  const tier = i => {
+    if (focused !== null) return labels && labels[i] === focused ? 2 : 0;
+    if (!labels || labels[i] < 0) return 0;
+    return (rank && rank.get(labels[i]) === undefined) ? 1 : 2;
+  };
+  for (let pass = 0; pass < 3; pass++) {
     for (let i = 0; i < n; i++) {
-      const isNoise = !labels || labels[i] < 0;
-      if ((pass === 0) !== isNoise) continue;
+      const t = tier(i);
+      if (t !== pass) continue;
+      const isNoise = t === 0;
       const [sx, sy] = toScreen(i);
       if (sx < -8 || sy < -8 || sx > canvas.width + 8 || sy > canvas.height + 8) continue;
       if (curRGB) {
@@ -70,8 +88,12 @@ function draw() {
       } else {
         ctx.fillStyle = NOISE;
       }
-      ctx.globalAlpha = isNoise ? 0.5 : 0.85;
-      ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
+      let a = t === 0 ? 0.5 : t === 1 ? 0.45 : 0.85;
+      if (focused !== null) a = labels[i] === focused ? 1 : 0.07;
+      ctx.globalAlpha = a;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
   ctx.globalAlpha = 1;
@@ -138,6 +160,9 @@ async function loadEmbedding() {
   labels = null; curRGB = null; prevRGB = null;
   view = { x: 0, y: 0, k: 1 };
   buildGrid();
+  /* Hide the placeholder as soon as there are points: leaving it up meant the
+     "no clustering yet" copy sat on top of 35,000 rendered hits. */
+  document.getElementById('empty').style.display = 'none';
   updateHud();
   resize();
 }
@@ -163,6 +188,12 @@ function updateHud() {
     s += `<span><b>${c.toLocaleString()}</b> clustered</span>`;
     s += `<span><b>${(labels.length - c).toLocaleString()}</b> noise</span>`;
   }
+  if (focused !== null) {
+    let f = 0;
+    for (let i = 0; i < labels.length; i++) if (labels[i] === focused) f++;
+    s += `<span class="focus">cluster <b>${focused}</b> · ${f.toLocaleString()} pts`
+       + ` · <span class="dim">esc to clear</span></span>`;
+  }
   document.getElementById('hud').innerHTML = s;
 }
 
@@ -176,10 +207,16 @@ function focusCluster(lab) {
     miny = Math.min(miny, y); maxy = Math.max(maxy, y); n++;
   }
   if (!n) return;
+  /* Zooming alone was not enough: you landed in a dense field with the target
+     cluster indistinguishable from its neighbours. Isolate it too, and let a
+     second click on the same row (or Escape) drop back to the full view. */
+  if (focused === lab) { focused = null; view = { x: 0, y: 0, k: 1 }; updateHud(); draw(); return; }
+  focused = lab;
   const sx = Math.max(maxx - minx, 0.02), sy = Math.max(maxy - miny, 0.02);
   view.k = Math.min(18, 0.7 / Math.max(sx, sy));
   view.x = 0.5 - ((minx + maxx) / 2) * view.k;
   view.y = 0.5 - ((miny + maxy) / 2) * view.k;
+  updateHud();
   draw();
 }
 
@@ -194,6 +231,10 @@ window.addEventListener('DOMContentLoaded', () => {
   canvas = document.getElementById('plot');
   ctx = canvas.getContext('2d');
   window.addEventListener('resize', resize);
+  /* The results panel swaps in only after the first cluster, which shrinks
+     #plot-wrap. Without this the canvas kept its full-height size and the
+     bottom ~40% of the scatter was drawn into a clipped, invisible region. */
+  new ResizeObserver(resize).observe(canvas.parentElement);
   resize();
 
   let dragging = false, lx = 0, ly = 0;
@@ -235,7 +276,16 @@ window.addEventListener('DOMContentLoaded', () => {
       .then(html => { const el = document.getElementById('hit'); if (el) el.innerHTML = html; });
   });
 
-  document.body.addEventListener('clusterDone', e => loadLabels(e.detail.run));
+  document.body.addEventListener('clusterDone', e => {
+    rank = e.detail.top ? new Map(e.detail.top.map((l, i) => [l, i])) : null;
+    focused = null;
+    loadLabels(e.detail.run);
+  });
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && focused !== null) {
+      focused = null; view = { x: 0, y: 0, k: 1 }; updateHud(); draw();
+    }
+  });
 });
 
 function showTip(x, y, i) {
