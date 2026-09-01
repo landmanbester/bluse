@@ -106,7 +106,8 @@ Applied in order, following Tremblay et al. 2026 (K2-18b, VLA + MeerKAT):
 
 1. **Known-RFI frequency masks** [§3.1] — `rfi_masks.py`
 2. **Zero drift rate** [§3.2] — local RFI
-3. **Maximum drift rate** [§3.2] — faster than a bound companion plausibly drifts
+3. **Maximum drift rate** [§3.2] — faster than a bound companion plausibly
+   drifts. **Off by default**; `--max-drift-coeff 4.18e-4` enables it
 4. **SNR window** [§3.3] — below is mostly false positives, above is instrumental
 5. **Multi-beam coincidence** [§3.4] — ±1 *fine channel*, ±1 drift step, per observation
 6. **Coherent/incoherent ratio** [§3.7] — `SNR_coh ≤ √N·SNR_incoh` *(wired up, inert until data arrives)*
@@ -160,7 +161,9 @@ MHz, which reproduces all three anchor values the paper quotes.
 *Caveat, recorded in the code:* that coefficient bounds Earth's rotation
 (~1.1e-4 Hz/s per MHz, universal) **plus K2-18b's own orbital acceleration**.
 Our targets are arbitrary Gaia sources, so treat it as a generous envelope
-rather than a per-target limit. `--no-max-drift` turns it off.
+rather than a per-target limit. This caveat is why the cut ended up **off by
+default** a day later — see the Myburgh section below. `--max-drift-coeff
+4.18e-4` switches it on.
 
 **3. Cross-epoch persistence ignored drift rate.** §3.6 requires a signal to
 recur at the same frequency *and* the same drift to count as interference. Ours
@@ -304,9 +307,24 @@ and `batch` columns give the real provenance. The legend above the table says
 all of this in place.
 
 While a run is in flight the time reading is replaced by a spinner, the stats
-strip and the plot dim, and `working` appears in the header — a re-cluster takes
-1–2 s and the panel otherwise keeps showing the previous numbers, which reads as
-nothing having happened.
+strip and the plot dim, and `working` appears in the header — the panel
+otherwise keeps showing the previous numbers, which reads as nothing having
+happened.
+
+**The indicator covers both halves of a re-cluster, which is the whole point.**
+A run is a server phase (POST `/cluster`) and then a client phase (refetch the
+embedding, reload the labels, redraw). The server phase is the fast one —
+measured at 0.6 ms on a cached run — while changing the feature set invalidates
+the embedding and forces a fresh projection: 11 s for UMAP on a 35k sample of
+`all`, up to a minute cold. htmx's `hx-indicator` only knows about the request,
+so the spinner used to stop after ~0.8 s and the plot would then change on its
+own many seconds later. `scatter.js` now holds a counted `busy` class across
+both phases, and the HUD names the slow step (`projecting (umap)…`) rather than
+leaving a silent gap.
+
+Note that the `time` stat is the *clustering* time and nothing else. A run
+reporting `0.69s` can still take half a minute of wall clock if it had to
+re-project — that is the projection, not the clusterer.
 
 How it works: the embedding projects exactly the matrix HDBSCAN sees, so it is
 cached per (method, scaling, feature set) and refetched only when one of those

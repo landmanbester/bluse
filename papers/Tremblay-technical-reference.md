@@ -193,7 +193,7 @@ We were matching ~37% too tightly in L and S band, under-counting beam multiplic
 
 ### 6.3 Maximum drift rate — added 2026-09
 
-We implemented zero-drift but never the upper bound. `--max-drift-coeff` (Hz s⁻¹ per MHz, default **4.18e-4**) reproduces all three of their anchor values; the limit is per-hit, `coeff × frequency_MHz`. `--no-max-drift` disables it.
+We implemented zero-drift but never the upper bound. `--max-drift-coeff` (Hz s⁻¹ per MHz) applies a per-hit limit of `coeff × frequency_MHz`; **4.18e-4** reproduces all three of their anchor values. It defaults to **0, i.e. off** — see `papers/Myburgh-technical-reference.md` §6 for why a blind survey should not adopt a limit derived from one known planetary system.
 
 Two honest caveats, recorded in the code:
 

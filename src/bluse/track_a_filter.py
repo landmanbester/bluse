@@ -140,7 +140,7 @@ def cut_max_drift(df, coeff):
        MHz, and universal -- PLUS K2-18b's own orbital acceleration. Our targets
        are arbitrary Gaia sources whose companions we know nothing about, so
        read this as a generous envelope, not a per-target limit. Pass
-       --max-drift-coeff to change it or --no-max-drift to switch it off.
+       --max-drift-coeff sets it; it defaults to 0, i.e. off.
 
     2. The paper does not apply its own prescription. Section 3.2 gives the
        frequency-scaled limits above; section 4 then applies a blanket

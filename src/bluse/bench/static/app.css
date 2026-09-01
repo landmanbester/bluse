@@ -323,10 +323,20 @@ td .swatch {
 #hit dt { color: var(--dimmer); }
 #hit dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 
-/* hx-indicator puts .htmx-request on the INDICATOR element itself, so this has
+/* Two sources of "busy", and both must light the same indicators.
+
+   .htmx-request  htmx adds it for the lifetime of the POST /cluster request.
+   .busy          scatter.js adds it for the client-side half -- refetching the
+                  embedding and reloading labels. That half is the SLOW one: the
+                  POST returns in milliseconds while a UMAP re-projection after
+                  a feature-set change takes 11-60 s. Indicating only the htmx
+                  request made a re-cluster look like it had finished
+                  instantly, and then the plot changed under you much later.
+
+   hx-indicator puts .htmx-request on the INDICATOR element itself, so this has
    to be #spin.htmx-request. It was written as a descendant selector and so
    never matched anything. */
-#spin.htmx-request { opacity: 1; }
+#spin.htmx-request, #spin.busy { opacity: 1; }
 #spin {
   opacity: 0; transition: opacity .15s;
   font-family: var(--mono); font-size: 10px;
@@ -350,12 +360,15 @@ td .swatch {
 .spinner-text {
   font-family: var(--mono); font-size: 13px; color: var(--accent);
 }
-#results.htmx-request .tv { display: none; }
-#results.htmx-request .spinner { display: block; }
-#results.htmx-request .stats { opacity: 0.55; transition: opacity .15s; }
-#results.htmx-request .stat:last-child { opacity: 1; }
+#results.htmx-request .tv, #results.busy .tv { display: none; }
+#results.htmx-request .spinner, #results.busy .spinner { display: block; }
+#results.htmx-request .stats, #results.busy .stats {
+  opacity: 0.55; transition: opacity .15s;
+}
+#results.htmx-request .stat:last-child, #results.busy .stat:last-child { opacity: 1; }
 /* The plot is about to be recoloured; dim it so it reads as provisional. */
-#results.htmx-request ~ * #plot, body:has(#results.htmx-request) #plot {
+#results.htmx-request ~ * #plot, body:has(#results.htmx-request) #plot,
+#results.busy ~ * #plot, body:has(#results.busy) #plot {
   opacity: 0.45; transition: opacity .15s;
 }
 
@@ -387,6 +400,7 @@ td .swatch {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
   /* A ring that cannot spin just looks like a broken glyph. */
-  #results.htmx-request .spinner { display: none; }
-  #results.htmx-request .spinner-text { display: inline; }
+  #results.htmx-request .spinner, #results.busy .spinner { display: none; }
+  #results.htmx-request .spinner-text,
+  #results.busy .spinner-text { display: inline; }
 }

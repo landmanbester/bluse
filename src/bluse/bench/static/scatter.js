@@ -168,9 +168,41 @@ function embedQuery() {
   return q;
 }
 
+/* A re-cluster is TWO phases and htmx only knows about the first.
+   POST /cluster returns in milliseconds; the client then refetches the
+   embedding, and after a feature-set change that is a fresh projection --
+   measured at 11 s for UMAP on a 35k sample of `all`, and up to ~60 s cold.
+   With only hx-indicator driving the spinner the run looked like it had
+   finished instantly and then the plot changed by itself much later.
+
+   Counted rather than boolean: loadEmbedding and loadLabels each claim busy and
+   clusterDone wraps both, so the nesting must not clear the state early. */
+let busyCount = 0;
+function setBusy(on) {
+  busyCount = Math.max(0, busyCount + (on ? 1 : -1));
+  const b = busyCount > 0;
+  for (const id of ['results', 'spin']) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('busy', b);
+  }
+}
+
 async function loadEmbedding() {
   if (!window.DSKEY) return;
-  document.getElementById('hud').innerHTML = 'loading embedding…';
+  setBusy(true);
+  try {
+    await loadEmbeddingInner();
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function loadEmbeddingInner() {
+  /* Name the slow thing. A silent minute reads as a hang; "projecting (umap)"
+     reads as work. */
+  const method = (document.getElementById('embed-method') || {}).value || 'pca';
+  document.getElementById('hud').innerHTML =
+    `projecting (${method})…` + (method === 'umap' ? ' <span class="dim">up to a minute</span>' : '');
   const res = await fetch('/embedding.bin?' + embedQuery().toString());
   if (!res.ok) { document.getElementById('hud').innerHTML = ''; return; }
   embSig = res.headers.get('X-Emb-Sig') || '';
@@ -186,15 +218,20 @@ async function loadEmbedding() {
 }
 
 async function loadLabels(run) {
-  currentRun = run;
-  const res = await fetch(`/labels.bin?run=${run}`);
-  if (!res.ok) return;
-  labels = new Int32Array(await res.arrayBuffer());
-  prevRGB = curRGB;
-  curRGB = buildRGB();
-  document.getElementById('empty').style.display = 'none';
-  updateHud();
-  animateRecolour();
+  setBusy(true);
+  try {
+    currentRun = run;
+    const res = await fetch(`/labels.bin?run=${run}`);
+    if (!res.ok) return;
+    labels = new Int32Array(await res.arrayBuffer());
+    prevRGB = curRGB;
+    curRGB = buildRGB();
+    document.getElementById('empty').style.display = 'none';
+    updateHud();
+    animateRecolour();
+  } finally {
+    setBusy(false);
+  }
 }
 
 function updateHud() {
@@ -295,10 +332,18 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   document.body.addEventListener('clusterDone', async e => {
-    rank = e.detail.top ? new Map(e.detail.top.map((l, i) => [l, i])) : null;
-    focused = null;
-    if (e.detail.emb && e.detail.emb !== embSig) await loadEmbedding();
-    loadLabels(e.detail.run);
+    /* Claim busy for the whole handler. htmx drops .htmx-request the moment
+       the POST resolves, which is before any of this has run; without an outer
+       claim the indicator would flicker off between the two awaits below. */
+    setBusy(true);
+    try {
+      rank = e.detail.top ? new Map(e.detail.top.map((l, i) => [l, i])) : null;
+      focused = null;
+      if (e.detail.emb && e.detail.emb !== embSig) await loadEmbedding();
+      await loadLabels(e.detail.run);
+    } finally {
+      setBusy(false);
+    }
   });
   window.addEventListener('keydown', e => {
     if (e.key === 'Escape' && focused !== null) {
