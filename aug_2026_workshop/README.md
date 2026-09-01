@@ -197,6 +197,12 @@ python explorer/app.py --port 8080 --host 0.0.0.0   # share on the LAN
 FastAPI + htmx + a canvas scatter. Pick a file, toggle features, adjust
 HDBSCAN, press **Cluster**. A re-cluster on a 35k sample takes ~1.2 s.
 
+Changing the file, sample or seed loads the new dataset immediately — the
+selector never shows a file that is not the one on screen. (It used to: the
+select held a pending choice while the cluster form kept the previously loaded
+key, so switching file and pressing Cluster re-ran the *old* dataset, hit the
+run cache and returned identical numbers. It looked like the app had frozen.)
+
 **The feature rail.** Each feature shows its interquartile range as a bar —
 the *raw* spread, before scaling. On `sband_short`, `f02_abs_drift` measures
 5.954 against `f03_snr` at 0.092, a 65× imbalance. Since HDBSCAN's Euclidean

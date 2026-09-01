@@ -22,8 +22,14 @@
       <p class="error">No feature files yet. Run
         <code>python track_b_features.py</code> to build them.</p>
     {% else %}
+    <!-- Changing anything here LOADS it. Without this the controls showed a
+         pending intent while #cluster-form kept the previously loaded key, so
+         changing the file and pressing Cluster silently re-ran the OLD dataset,
+         hit the run cache and returned identical numbers -- it looked like the
+         app had frozen. `change` (not `input`) fires on commit, so typing a
+         sample size does not reload on every keystroke. -->
     <form hx-post="/dataset" hx-target="#controls" hx-swap="innerHTML"
-          hx-indicator="#spin">
+          hx-indicator="#spin" hx-trigger="submit, change">
       <div class="eyebrow">Dataset</div>
       <label class="field">
         <span>file</span>

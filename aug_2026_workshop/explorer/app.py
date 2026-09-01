@@ -381,9 +381,17 @@ def pick_dataset(request: Request, file: str = Form(...),
     })
 
 
-def emb_sig(method, scaling, cols):
-    """Identity of an embedding; the client refetches when this changes."""
-    return hashlib.sha1(json.dumps([method, scaling, sorted(cols)]).encode()
+def emb_sig(key, method, scaling, cols):
+    """
+    Identity of an embedding; the client refetches when this changes.
+
+    The dataset key belongs in here. Without it two files with the same feature
+    names and scaling hashed identically, so a run on a newly loaded dataset
+    could tell the client its geometry was current when it was still the old
+    file's. Nothing exercised that while every load refetched anyway, but it
+    was one reordering away from a plot that silently showed the wrong points.
+    """
+    return hashlib.sha1(json.dumps([key, method, scaling, sorted(cols)]).encode()
                         ).hexdigest()[:12]
 
 
@@ -398,7 +406,7 @@ def embedding_bin(request: Request, key: str, method: str = "pca",
         cols = list(ds.columns)
     return Response(embed(ds, method, cols, scaling).tobytes(),
                     media_type="application/octet-stream",
-                    headers={"X-Emb-Sig": emb_sig(method, scaling, cols)})
+                    headers={"X-Emb-Sig": emb_sig(key, method, scaling, cols)})
 
 
 @app.post("/cluster", response_class=HTMLResponse)
@@ -408,6 +416,16 @@ async def do_cluster(request: Request):
     ds = DATASETS.get(key)
     if ds is None:
         return HTMLResponse('<p class="error">Dataset expired. Load it again.</p>')
+
+    # The file select lives outside this form and is pulled in via hx-include.
+    # If it has moved on from the loaded dataset, clustering the stale key would
+    # return a cached run for the PREVIOUS file and look like nothing happened.
+    chosen = form.get("file")
+    if chosen and chosen != ds.name:
+        return HTMLResponse(
+            f'<p class="error">Showing <b>{ds.name}</b>, but the file selector '
+            f'says <b>{chosen}</b>. Press Load to switch datasets, then '
+            f'cluster.</p>')
 
     cols = [c for c in form.getlist("feat") if c in ds.columns]
     if len(cols) < 2:
@@ -469,7 +487,7 @@ async def do_cluster(request: Request):
         "run": run.run_id, "top": top,
         # The embedding now depends on the feature set and the scaling, so the
         # client has to know when the geometry it is showing went stale.
-        "emb": emb_sig(form.get("embed", "pca"), p["scaling"], cols),
+        "emb": emb_sig(key, form.get("embed", "pca"), p["scaling"], cols),
     }})
     return resp
 

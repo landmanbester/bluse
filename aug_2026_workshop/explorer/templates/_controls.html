@@ -1,5 +1,8 @@
+<!-- hx-include pulls in the dataset select so the server can verify that the
+     key we are submitting still matches the file on screen. -->
 <form id="cluster-form" hx-post="/cluster" hx-target="#results"
-      hx-swap="innerHTML" hx-indicator="#results, #spin">
+      hx-swap="innerHTML" hx-indicator="#results, #spin"
+      hx-include="select[name='file']">
   <input type="hidden" name="key" value="{{ ds.key }}">
 
   <div class="eyebrow">Feature weights</div>
