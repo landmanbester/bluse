@@ -413,6 +413,15 @@ def main():
                    help="percentile of the merge heights used as the cut when "
                         "--match-cut is not given. Higher = fewer, broader "
                         "families; p50 is where the reproducibility gain peaks")
+    p.add_argument("--match-families", type=int, default=None,
+                   help="ask for exactly this many families, instead of "
+                        "deriving a cut. PREFER THIS: every cut of the Ward "
+                        "tree is uniquely determined by the family count it "
+                        "leaves, so a derived threshold only picks a count "
+                        "while looking like it measured something. On "
+                        "sband_short/eom family ARI is flat at 0.519 from 19 "
+                        "to 39 families and collapses to 0.033 by 72; "
+                        "--match-families 36 sits at the top of that plateau")
     p.add_argument("--seeds", type=int, default=0,
                    help="if >1, re-run across this many seeds and report "
                         "membership ARI, composite ARI and noise agreement. "
@@ -471,6 +480,7 @@ def main():
         labels, cols = cluster_single(df, args)
         trace = [int((labels < 0).sum())]
 
+    match_info = None
     if args.match:
         # main() does not hold the scaled matrix -- feature_matrix is called
         # inside the clustering functions -- so recompute it on the columns
@@ -478,15 +488,24 @@ def main():
         # the family column travels with the per-hit output for free.
         X, _, _ = feature_matrix(df, columns=cols, scaling=args.scaling)
         fam, minfo = matching.match(labels, X, cut=args.match_cut,
-                                    pct=args.match_pct)
+                                    pct=args.match_pct,
+                                    n_families=args.match_families)
         df["family"] = fam
         print(f"  matched {minfo['n_clusters']:,} clusters -> "
               f"{minfo['n_families']:,} families at cut {minfo['cut']:.3f} "
               f"({minfo['cut_source']})")
+        # Keep the family count and how it was chosen in the machine-readable
+        # record, not only on stdout. The count is a CHOICE -- no cut rule can
+        # derive it, since every cut of the Ward tree is determined by the
+        # count it leaves (docs/matching-cut-experiment-2026-09.md) -- so a
+        # family result is not interpretable without it.
+        match_info = {k: v for k, v in minfo.items() if k != "nn_distances"}
 
     summarise(df, labels, args.outdir, tag)
     q = metrics.quality(labels, df)
     q["epochs"] = metrics.epoch_trace(trace, len(labels))
+    if match_info is not None:
+        q["matching"] = match_info
     if args.seeds and args.seeds > 1:
         # Dispatch through the SAME mode as the primary run. Hardcoding
         # cluster_epochs meant `--mode single --seeds N` measured the stability
@@ -506,7 +525,8 @@ def main():
                     Xs, _, _ = feature_matrix(df, columns=cs,
                                               scaling=args.scaling)
                     fam = matching.match(lab, Xs, cut=args.match_cut,
-                                         pct=args.match_pct)[0]
+                                         pct=args.match_pct,
+                                         n_families=args.match_families)[0]
                 seed_cache[seed] = (lab, fam)
             return seed_cache[seed]
 

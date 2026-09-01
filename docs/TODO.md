@@ -1,12 +1,13 @@
 # Outstanding work — BLUSE
 
-**Updated:** 2026-09-01, immediately after PR #1 merged (`1a1bae0`).
+**Updated:** 2026-09-01, after closing P0-1 and P0-2.
 **Purpose:** enough context to resume any item without re-deriving it.
 
-State: on `main`, clean tree, 52 tests passing (48 + 4 skipped outside a
+State: on `main`, clean tree, 58 tests passing (54 + 4 skipped outside a
 workspace). PR #1 merged the Cluster Bench measurement work — three new
 modules (`diagnostics`, `metrics`, `matching`), wiring into both entry points,
-and the repository's first test suite.
+and the repository's first test suite. P0-1 and P0-2 are since closed by
+measurement; **P0-3 is the only open P0 item**.
 
 ---
 
@@ -72,24 +73,37 @@ a physical drift rate.
 
 ## P0 — do these before quoting numbers anywhere
 
-### 1. Restricted gap rule for the matching cut
-*Implementation review §1 option 2. One experiment.*
+### 1. Restricted gap rule for the matching cut — **DONE 2026-09-01, REJECTED**
 
-`derive_cut_pct` is a **granularity dial**, not a structure-sensitive rule:
-cutting at the p-th percentile of k−1 merge heights performs the lowest p% of
-merges, returning ≈k(1−p/100) groups regardless of structure. Verified on pure
-noise. The `gap` rule fails on real data because the final merges of any
-dendrogram dominate the gap statistic (it collapsed 2,162 clusters into 4
-whole-band families).
+Result in [`matching-cut-experiment-2026-09.md`](matching-cut-experiment-2026-09.md).
 
-**Test:** restrict the gap search to merges below ~the 90th percentile, which
-removes the root merges. If it works it responds to structure, which a
-granularity dial cannot. Compare family count, family ARI and narrow share
-against `pct` at matched counts.
+The proposal was answering the wrong question. **Every horizontal cut of a
+fixed Ward tree is uniquely determined by the family count it leaves** — 1,400
+thresholds tested across the real trees and synthetics, zero exceptions — so a
+cut rule never selects a better partition, only a point on a fixed nested
+chain. No threshold rule can find what `n_families=` cannot state outright.
 
-*Where:* `matching.derive_cut_gap` — add a `max_pct=90` bound and a new rule
-name. `tests/unit/test_matching.py` already exercises `gap` on the separated
-fixture, which is the case it should still pass.
+The restricted gap rule also fails on its own terms: the `max_pct` bound is
+itself a granularity dial and a worse-behaved one (on `leaf`, p95 → 113
+families, p90 → 2,157), and on 60 clusters carrying 3, 6, or no planted
+families **no bound recovers the planted count** or even distinguishes
+structured from structureless data. Not shipped; the measurement is recorded
+in `derive_cut_gap`'s docstring under an explicit "DO NOT ADD A max_pct BOUND".
+
+**Shipped instead:** `n_families=` on `matching.match()` and `--match-families`
+on the CLI — the interface `derive_cut_pct`'s docstring had been telling
+readers to prefer since it was written, which turned out never to have been
+built.
+
+**Consequences for anything quoting family numbers:**
+- Quote `eom` family results at **19–39 families**. famARI is flat at 0.519
+  across that plateau and collapses to 0.033 by 72; p50's 36 sits at the top
+  of it with ~10% headroom.
+- `leaf` has **no plateau** — famARI falls and narrow share rises
+  monotonically, so its family count is a trade-off to be argued, not derived.
+- A real family count needs a different instrument: `hdbscan` cluster
+  persistence / DBCV (P2-2) or the synthetic injections. Not another threshold
+  rule on the same tree.
 
 ### 2. `f09_temporal_skew` down-weighting — **DONE 2026-09-01**
 

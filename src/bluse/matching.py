@@ -152,6 +152,24 @@ def derive_cut_pct(heights, pct=50):
     coarsening leaf to eom's granularity takes its narrow share from 6.820% to
     0.194%, BELOW eom's 0.670%. leaf's coherence is a property of its fine
     granularity, not of the extraction method.
+
+    WHY p50 IS NEVERTHELESS A GOOD DEFAULT FOR eom. Sweeping the whole cut
+    chain on sband_short shows family ARI is flat at its maximum across a broad
+    plateau and then falls off a cliff:
+
+        families      4      8     19     23     36     39     45     54     72
+        famARI    0.477  0.403  0.519  0.519  0.519  0.519  0.261  0.199  0.033
+        narrow %  0.000  0.553  0.553  0.567  0.670  0.670  0.710  0.776  0.776
+
+    p50 picks 36 -- inside the plateau, and at its best narrow share. The
+    plateau ends between 39 and 45, so the default has roughly 10% headroom
+    before reproducibility collapses. That is luck rather than measurement, but
+    it is why the default has held up.
+
+    leaf has no such plateau: famARI falls monotonically (0.762 at 4 families
+    to 0.032 at 2,157) while the narrow share rises monotonically, so there is
+    no knee for any rule to find and the count is a genuine trade-off the
+    analyst must state. Use `n_families=`.
     """
     h = np.asarray(heights, dtype=np.float64)
     if not len(h):
@@ -168,6 +186,32 @@ def derive_cut_gap(heights):
     merges on real data; see derive_cut_pct for the numbers. Kept because it is
     the right answer when families genuinely are separated, which is the case
     the synthetic fixture covers and the case a future scaling fix may create.
+
+    DO NOT ADD A max_pct BOUND. Restricting the gap search to merges below a
+    percentile -- so the root merges cannot dominate -- was proposed by the
+    implementation review, measured, and rejected. Three results, in
+    docs/matching-cut-experiment-2026-09.md:
+
+      1. The bound IS the granularity dial, and a worse-behaved one. On
+         sband_short/leaf the family count runs 4 (unbounded), 31 (p99), 113
+         (p95), then 2,157 (p90) -- essentially no merging at all. A five-point
+         change in an arbitrary parameter moves the answer by 19x, where `pct`
+         moves smoothly and predictably.
+
+      2. It does not respond to structure, which was the entire motivation. On
+         60 clusters carrying 3 planted families, 6 planted families, or none
+         at all, no bound recovers the planted count, and the counts returned
+         on structureless data are indistinguishable from those on strongly
+         structured data (at p90: 14 on noise, 30 on 3 families, 13 on 6).
+
+      3. It cannot help anyway. See match(): a cut only ever chooses a family
+         count, so no threshold rule can find a partition that `n_families=`
+         cannot state outright.
+
+    The gap rule's success on the fixture is also weaker evidence than it
+    looks: because root merges dominate, it returns 2-4 families on almost any
+    input, and lands on exactly 3 about a quarter of the time by coincidence.
+    See test_gap_rule_is_not_evidence_of_structure_sensitivity.
     """
     h = np.sort(np.asarray(heights, dtype=np.float64))
     if len(h) < 2:
@@ -210,20 +254,30 @@ def _match_tsne(C):
     return out
 
 
-def match(labels, X, *, cut=None, pct=50, rule="pct", method="ward"):
+def match(labels, X, *, cut=None, pct=50, rule="pct", n_families=None,
+          method="ward"):
     """
     Group clusters into families.
 
     Returns (family_ids, info). `family_ids` is aligned with `labels` and is
     -1 wherever `labels` is -1.
 
-    The cut is chosen in this order: an explicit `cut` wins; else `rule`
-    selects a derivation. Default is the 50th percentile of the Ward merge
-    heights, which is where the measured reproducibility gain peaks (see
-    derive_cut_pct). A hardcoded constant is not an option -- the per-file
-    drift lattice alone spans 5.26x across our eight files (uhf_long 0.00204
-    Hz/s, sband_short 0.01071), so a value tuned on one file is wrong on
-    another.
+    The cut is chosen in this order: an explicit `cut` wins; then
+    `n_families`; else `rule` selects a derivation. Default is the 50th
+    percentile of the Ward merge heights, which is where the measured
+    reproducibility gain peaks (see derive_cut_pct). A hardcoded constant is
+    not an option -- the per-file drift lattice alone spans 5.26x across our
+    eight files (uhf_long 0.00204 Hz/s, sband_short 0.01071), so a value tuned
+    on one file is wrong on another.
+
+    PREFER `n_families=`. Every horizontal cut of a fixed Ward tree is
+    uniquely determined by the number of families it leaves -- verified over
+    1,000 thresholds on the real sband_short trees with zero exceptions, and
+    pinned by test_a_distance_cut_is_exactly_a_choice_of_family_count. So a
+    cut rule never selects a better partition, only a point on a fixed nested
+    chain, and `n_families` says which point you want without pretending a
+    threshold derived it. `cut` and `pct` are kept because the published
+    sweeps were measured against them.
 
     method="ward"  exact Ward linkage on centroids. The default.
     method="tsne"  GLOBULAR's own route -- PCA to 6, t-SNE (perplexity 40,
@@ -266,6 +320,18 @@ def match(labels, X, *, cut=None, pct=50, rule="pct", method="ward"):
         assign = _match_tsne(C)
     else:
         Z = linkage(C, method="ward")
+        if cut is None and n_families is not None:
+            # Ask for the count directly. maxclust rather than a derived
+            # threshold because it is exact under tied merge heights, where
+            # a height-based cut can overshoot.
+            n = int(np.clip(n_families, 2, len(ids)))
+            assign = fcluster(Z, t=n, criterion="maxclust")
+            # Report the height that cut would have sat at, for continuity
+            # with the rule paths -- rows of Z are ascending, and leaving n
+            # groups means performing the lowest len(ids)-n merges.
+            info["cut"] = float(Z[len(ids) - n - 1, 2]) if n < len(ids) else 0.0
+            info["cut_source"] = f"n_families={n_families}"
+            return _assign(fam, labels, ids, assign, info)
         if cut is not None:
             source = "explicit"
         elif rule == "gap":
@@ -280,8 +346,14 @@ def match(labels, X, *, cut=None, pct=50, rule="pct", method="ward"):
         # family; guard so a degenerate cut does not look like a real answer.
         assign = fcluster(Z, t=max(float(cut), 1e-12), criterion="distance")
 
-    # Map cluster id -> family id, vectorised. ids is sorted, so searchsorted
-    # gives each hit's position in `ids` in one pass.
+    return _assign(fam, labels, ids, assign, info)
+
+
+def _assign(fam, labels, ids, assign, info):
+    """
+    Map cluster id -> family id, vectorised. ids is sorted, so searchsorted
+    gives each hit's position in `ids` in one pass.
+    """
     assign = np.asarray(assign, dtype=np.int32)
     clustered = labels >= 0
     pos = np.searchsorted(ids, labels[clustered])
