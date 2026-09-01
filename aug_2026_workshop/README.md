@@ -338,6 +338,127 @@ to zoom to that cluster.
 UMAP gives better visual separation than PCA but takes ~60 s on 35k and blocks
 the request while it runs. It is cached per dataset, so you pay once.
 
+## Measuring a clustering, not eyeballing it
+
+Added 2026-09 after an external review of Cluster Bench. The review's one
+structural point was that the Bench exposed every knob and explained each one,
+but nothing on screen said whether a configuration was *better* — so tuning was
+by eye, on a scatter plot whose geometry these notes already warn against
+over-reading. Three modules fix that: `bluse.diagnostics` (what each feature
+contributes), `bluse.metrics` (is this clustering any good, and is it
+reproducible) and `bluse.matching` (do cluster ids mean anything across
+batches).
+
+Full numbers in `clusters/acceptance-2026-09.md`. The headlines:
+
+### Cluster ids were batch artefacts, and matching fixes it
+
+Two runs of an *identical* configuration, differing only in shuffle seed, agree
+at **ARI 0.028**. That is the noise floor — HDBSCAN mints local ids `0..k-1` in
+every batch, and the epoch loop runs many batches, so one physical population
+becomes a fresh id in every batch it appears in.
+
+Grouping clusters into families by Ward linkage on their centroids recovers it:
+
+| | cluster ARI | family ARI |
+|---|---:|---:|
+| `eom` | 0.0279 | **0.5190** |
+| `leaf` | 0.0316 | 0.1077 |
+
+An 18.6× gain for `eom`, with the narrow-cluster share essentially intact.
+`bluse-cluster --match`, or the Families control in the Bench.
+
+### `eom` vs `leaf` is a user choice
+
+They win on different axes, so the tool asks instead of deciding:
+
+| | `eom` | `leaf` |
+|---|---:|---:|
+| clusters | 72 | 2,162 |
+| narrow share <1 MHz | 0.776% | **6.820%** |
+| family membership ARI | **0.5190** | 0.1077 |
+| epochs doing any work | 3 of 8 | **8 of 8** |
+
+`leaf` groups 8.8× more coherently in frequency and restores a working epoch
+loop; `eom` plus matching reproduces 4.8× better. Pick `leaf` to build a
+taxonomy, `eom` to rank candidates. `eom` stays the default because every
+committed result here was produced with it.
+
+**The epoch budget was being spent in one pass.** Under `eom`, epoch 1 removes
+87.9%, epoch 2 removes 12.0%, epoch 3 removes 0.1%, and epochs 4–8 remove
+*nothing at all*. GLOBULAR reached 47.6% in epoch 1 then a flat 22–30% per
+epoch with no plateau at 8. The Bench now shows this as a table with dead
+epochs dimmed.
+
+### The objective function
+
+`narrow_frac` — the fraction of clustered hits in clusters spanning under
+1 MHz — is the headline. It needs no labels, has real dynamic range (0.776% to
+6.820%), and rewards the physical coherence an RFI taxonomy actually requires.
+It is reported at two thresholds so it cannot be an artefact of where the line
+was drawn (the ratio holds: 8.8× at 1 MHz, 7.5× at 0.1 MHz) and against a
+size-preserving permutation null (`leaf`'s 6.820% is 341× its null).
+
+AMI against `weak_label` is **not** the objective function, and shipping it as
+one would have been a mistake: among labelled rows the class balance is 31:1,
+its whole observed range is 0.0017–0.0048, and it ranks `eom` above `leaf` —
+the opposite of every other signal. It ships captioned. Hypergeometric
+minority-class enrichment replaced it and discriminates 10× (12.33% vs 1.19%)
+where AMI manages 1.8×.
+
+### What each feature actually contributes
+
+`bluse-cluster --file sband_short --report`, or the Bench rail. Robust scaling
+equalises the *interquartile range*, but HDBSCAN responds to *variance*, and
+the ratio between them depends on distribution shape — so contributions to the
+distance are not equal at all:
+
+| column | global share | k-NN share | flags |
+|---|---:|---:|---|
+| `x03_channel_offset` | 24.3% | 7.4% | tie, share-high |
+| `f07_kurt_bw_corr` | 13.1% | 13.0% | clip |
+| `f09_temporal_skew` | 6.7% | **15.5%** | — |
+| `f02_abs_drift` | 1.7% | 0.8% | tie, share-low |
+
+Equal share is 6.7%. **The two columns disagree, and that matters.** HDBSCAN
+keys on local density, so the k-NN column is the relevant one — and by it
+`x03` is unremarkable while `f09_temporal_skew` is the largest contributor.
+The earlier reading that `x03` dominates came from the global share and does
+not survive the local one.
+
+`f02_abs_drift` is a **42-level ordinal**, not a continuous feature:
+`|driftRate|` sits on an exact 0.010711 Hz/s lattice, the seticore Taylor-tree
+drift step. The lattice constant is per-file — six distinct values across the
+eight files, spanning 5.26× — so `driftSteps` is a per-file index and is *not*
+interchangeable with a physical drift rate. Its 26.6% tie at −5.199 halves its
+local share, exactly the tie–tie mechanism the audit predicts.
+
+`share_knn` is reported but **not thresholded**: no value for it had been
+measured when the flag rules were written, and inventing a bound then would
+have been the unverified-claim pattern this whole review cycle exists to
+correct. The values above are the baseline for thresholding it later.
+
+### Reproducibility is three numbers, never one
+
+The Bench's stability check reports membership ARI, composite ARI and noise
+agreement separately, because collapsing them is a measured error rather than a
+hypothetical one. `sklearn`'s `adjusted_rand_score` scores `-1` as an ordinary
+label, so a method leaving half its points unclustered is credited for every
+within-noise pair. `leaf` scores composite 0.480 against `eom`'s 0.024 — an
+apparent 20× advantage — while on membership the two are 0.032 and 0.028. A
+regression test fails if anyone recombines them.
+
+### Still deferred
+
+A contribution-equalising scaling mode, and reworking `f02` onto its native
+linear grid. Both were expected to be the next priority. One measurement argues
+against: dropping `x03` and `f07` outright — the crudest version of that fix —
+takes `leaf`'s narrow share from 6.820% to **2.969%**, i.e. the two dominant
+columns are *helping* coherence, not hurting it. That is not a controlled
+comparison, but combined with the k-NN result it means the scaling work should
+be evaluated against `narrow_frac` before it is built.
+
+
 ## Next
 
 Track A output feeds everything else. `<name>_cat.parquet` carries all original
