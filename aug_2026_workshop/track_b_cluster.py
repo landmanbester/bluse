@@ -24,26 +24,51 @@ Two modes:
                     survives is what no batch could group.
 
                     The batching is not a memory workaround -- it is integral.
-                    GLOBULAR's hyperparameters (min_cluster_size 4, min_samples
-                    2, epsilon 0.18) are tuned for ~3000-point batches and
-                    degrade badly on one large pass: 205 clusters vs 10 on
-                    sband_short.
+                    One large pass collapses: 71 clusters batched vs 2 in a
+                    single pass on sband_short, both at 99.9% clustered.
+
+                    Read the output in two parts. The ~14 clusters holding
+                    >1000 hits are one-blob-per-batch and carry the GLOBAL
+                    medians -- they are an artefact of the scheme, not
+                    families. The information is in the small clusters: 16 of
+                    them span <1 MHz in frequency, which is what a single
+                    emitter looks like.
 
   single            one HDBSCAN pass over a sample. Kept for comparison and for
                     trying your own hyperparameters at scale.
 
 KNOWN GAP -- CROSS-BATCH CLUSTER MATCHING
 -----------------------------------------
-Cluster ids are NOT comparable between batches or epochs. The same RFI family
-recurs in every batch and is labelled separately each time: on sband_short,
-clusters 100000/100001/100002/200000 have near-identical medians (2232.8 MHz,
-drift 0.032 Hz/s, 11.4 Hz bandwidth) and are plainly one population split four
-ways. GLOBULAR closed this with cross-batch matching to arrive at ~59 named RFI
-families; we have not implemented it yet.
+Cluster ids are not comparable between batches or epochs. The same RFI family
+recurs in every batch and is labelled separately each time. GLOBULAR closed this
+with cross-batch matching to arrive at ~59 named RFI families; we have not
+implemented it yet.
 
 Until it exists, read the cluster table as "these hits grouped with something"
 rather than as a taxonomy, and treat the UNCLUSTERED set -- which is well
 defined regardless -- as the actual output.
+
+Earlier versions of this file were worse than incomparable. Ids were offset by
+epoch only (`lab + ep * 100_000`) while HDBSCAN mints local ids 0..k-1 in every
+batch, so batch 0's cluster 3 and batch 7's cluster 3 became the same id and
+were actively fused. On sband_short that collapsed 731 real groups into 205
+reported ones. The reported cluster count was therefore a max over batches
+rather than a total, which is why min_cluster_size looked like the only
+hyperparameter that did anything, and why the largest ids carried the global
+medians instead of a family's. Fixed 2026-09: ids now run globally.
+
+STABILITY
+---------
+With min_samples <= 2 this clustering is bistable, not merely noisy. sklearn's
+allow_single_cluster=False forbids the root, so EOM makes one stability
+comparison at the top of the tree: the root's two children either win (k=2,
+~0% noise, one blob holding 99.7% of points) or lose, whereupon EOM descends to
+the leaves (~200 microclusters, ~40% noise). Nothing in between. Ten identical
+3000-point draws spanned k=2 to k=223 -- a 112x swing on the shuffle alone.
+min_samples=8 collapses that to k in [2,12]; it is the default for that reason.
+Every batch really is one connected blob: allow_single_cluster=True returns
+k=1 on all of them. Treat a large cluster count as a statement about EOM's
+threshold, not about the data.
 
 Outputs into --outdir:
     <tag>_clusters.parquet   every input row plus cluster_label and a
@@ -124,32 +149,29 @@ def feature_matrix(df, columns=None, drop_saturated=True, scaling="robust"):
     return X, columns, good
 
 
-_EPSILON_FALLBACKS = 0
-
-
 def run_hdbscan(X, args):
     """
-    HDBSCAN with a fallback for a bug in sklearn's epsilon search.
+    One HDBSCAN pass.
 
-    `cluster_selection_epsilon > 0` raises "only 0-dimensional arrays can be
-    converted to Python scalars" from `_tree.pyx:traverse_upwards` when a batch
-    collapses to a degenerate condensed tree -- which happens on the small,
-    homogeneous batches of the late epochs. Retrying that batch with epsilon=0
-    costs only the cluster merging, so we do that and count it rather than
-    losing the batch.
+    cluster_selection_epsilon is gone. The earlier version passed GLOBULAR's
+    0.18 and retried at 0 when sklearn raised; measurement showed the retry was
+    beside the point, because the parameter has no working range at all here.
+    sklearn's epsilon_search (_tree.pyx:606) tests epsilon against 1/d, the
+    RECIPROCAL of a leaf's split distance. Leaf splits in this feature space are
+    >~1.7, so 1/d is ~0.55: below that every epsilon returns a leaf set
+    bit-identical to epsilon=0 (measured ARI 1.000 for 0.0/0.05/0.18/0.5), and
+    above it traverse_upwards raises TypeError. The no-op region and the crash
+    region tile the domain, so there is nothing to tune.
+
+    GLOBULAR's 0.18 was chosen for their feature scaling, not ours.
     """
-    global _EPSILON_FALLBACKS
-    kw = dict(min_cluster_size=args.min_cluster_size,
-              min_samples=args.min_samples,
-              cluster_selection_method="eom", n_jobs=-1)
     try:
-        return HDBSCAN(cluster_selection_epsilon=args.epsilon, **kw).fit_predict(X)
+        return HDBSCAN(min_cluster_size=args.min_cluster_size,
+                       min_samples=args.min_samples,
+                       cluster_selection_method="eom",
+                       n_jobs=-1).fit_predict(X)
     except (TypeError, ValueError):
-        _EPSILON_FALLBACKS += 1
-        try:
-            return HDBSCAN(cluster_selection_epsilon=0.0, **kw).fit_predict(X)
-        except (TypeError, ValueError):
-            return np.full(len(X), -1, dtype=np.int32)
+        return np.full(len(X), -1, dtype=np.int32)
 
 
 def cluster_single(df, args):
@@ -179,6 +201,7 @@ def cluster_epochs(df, args):
     rng = np.random.default_rng(args.seed)
     labels = np.full(len(df), -2, dtype=np.int32)
     epoch_of = np.full(len(df), -1, dtype=np.int32)
+    next_id = 0
     print(f"  epoch 0: {len(alive):,} hits, {len(cols)} features")
 
     for ep in range(1, args.epochs + 1):
@@ -191,19 +214,21 @@ def cluster_epochs(df, args):
                 continue
             lab = run_hdbscan(X[b], args)
             clustered = lab >= 0
-            # Namespace cluster ids by epoch so they stay distinguishable.
-            labels[b[clustered]] = lab[clustered] + ep * 100_000
-            epoch_of[b[clustered]] = ep
+            if clustered.any():
+                # HDBSCAN mints local ids 0..k-1 in EVERY batch. Offsetting by
+                # epoch alone made batch 0's cluster 3 and batch 7's cluster 3
+                # both id 100003, fusing unrelated clusters: on sband_short 731
+                # real groups collapsed to 205 reported ones. The epoch is
+                # already recorded in epoch_of, so ids just run globally.
+                labels[b[clustered]] = lab[clustered] + next_id
+                next_id += int(lab[clustered].max()) + 1
+                epoch_of[b[clustered]] = ep
             survivors.append(b[~clustered])
         alive = np.concatenate(survivors) if survivors else np.array([], int)
         pct = 100 * len(alive) / max(1, int(good.sum()))
         print(f"  epoch {ep}: {len(alive):,} remaining ({pct:.1f}%)")
         if len(alive) < args.min_cluster_size * 2:
             break
-    if _EPSILON_FALLBACKS:
-        print(f"  ({_EPSILON_FALLBACKS} batches retried with epsilon=0 "
-              f"after the sklearn epsilon-search bug)")
-
     labels[alive] = -1                                  # never clustered
     epoch_of[alive] = args.epochs + 1
     return labels, cols, epoch_of
@@ -328,10 +353,13 @@ def main():
     p.add_argument("--batch", type=int, default=3000, help="GLOBULAR used ~3000")
     p.add_argument("--min-cluster-size", type=int, default=4,
                    help="HDBSCAN n_pts; GLOBULAR used 4")
-    p.add_argument("--min-samples", type=int, default=2,
-                   help="HDBSCAN rho_pts; GLOBULAR used 2")
-    p.add_argument("--epsilon", type=float, default=0.18,
-                   help="HDBSCAN merge threshold; GLOBULAR used 0.18")
+    p.add_argument("--min-samples", type=int, default=8,
+                   help="HDBSCAN rho_pts. GLOBULAR used 2, but sklearn counts "
+                        "the point itself, so 1 and 2 are the same call -- no "
+                        "core-distance smoothing, i.e. pure single linkage. "
+                        "That made identical 3000-point draws return either "
+                        "k=2 holding 99.7%% of points or ~200 microclusters "
+                        "with 40%% noise. 8 collapses that to k in [2,12].")
     p.add_argument("--scaling", choices=["robust", "quantile", "none"],
                    default="robust",
                    help="how to equalise feature contribution before the "

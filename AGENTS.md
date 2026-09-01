@@ -221,15 +221,47 @@ original metadata plus `n_beams`, `n_obs_at_freq`, `log_snr`, `log_power`,
 - Extraction over all 2,022,171 hits takes ~7 min; 1,612,171 have usable
   features (the shortfall is the corruption in gotcha 7).
 - Clustering follows GLOBULAR's iterative batching. **The batching is integral,
-  not a memory workaround** — their hyperparameters are tuned for ~3000-point
-  batches and give 10 clusters instead of 205 on one large pass.
+  not a memory workaround** — one large pass collapses to 2 clusters against 71
+  batched on sband_short.
+
+**Gotcha 9 — three defects fixed 2026-09; do not reintroduce them.** All three
+made the bench look insensitive to every knob except `min_cluster_size`:
+
+1. **Cluster ids collided across batches.** HDBSCAN mints local ids `0..k-1` in
+   *every* batch, but the code offset by epoch only (`lab + ep * 100_000`), so
+   batch 0's cluster 3 and batch 7's cluster 3 became the same id and were
+   fused. On sband_short 731 real groups collapsed into 205 reported ones. The
+   reported count was a *max over batches*, not a total — which is exactly why
+   only `min_cluster_size` appeared to do anything, and why the biggest ids
+   carried the global medians. Ids now run globally via a running offset.
+2. **`min_samples` default 2 → 8.** sklearn counts the point itself, so `ms=1`
+   and `ms=2` are the same call: no core-distance smoothing, i.e. pure single
+   linkage. With `allow_single_cluster=False` EOM then makes one stability
+   comparison at the root and the run is **bistable** — ten identical
+   3000-point draws returned either k=2 holding 99.7% of points or ~200
+   microclusters with 40% noise, a 112× swing on the shuffle alone. `ms=8`
+   collapses that to k∈[2,12]. Every batch really is one connected blob:
+   `allow_single_cluster=True` returns k=1 on all of them.
+3. **`cluster_selection_epsilon` removed, not re-ranged.** sklearn's
+   `epsilon_search` (`_tree.pyx:606`) tests epsilon against `1/d`, the
+   *reciprocal* of a leaf's split distance. Leaf splits here are ≳1.7, so
+   `1/d ≈ 0.55`: below that every epsilon is bit-identical to 0 (ARI 1.000 for
+   0.0/0.05/0.18/0.5), above it `traverse_upwards` raises `TypeError`. No-op
+   region and crash region tile the domain — there is no working value.
+
+**How to read the cluster table.** The ~14 clusters holding >1000 hits are
+one-blob-per-batch and carry the *global* medians; they are an artefact of the
+batching, not families. The information is in the small clusters — 16 of them
+span <1 MHz in frequency, which is what a single emitter looks like — and in
+the noise set.
 
 **Two known gaps in Track B**, both documented in `track_b_cluster.py`:
-cross-batch cluster matching is **not implemented**, so cluster ids are not
-comparable between batches and the same RFI family appears several times; and
-scaling had to be added beyond GLOBULAR's spec (`--scaling robust`, default)
-because their transforms alone leave feature IQRs spanning 0.036 to 5.88 on our
-data, so Euclidean distance became drift rate and nothing else.
+cross-batch cluster matching is **not implemented**, so cluster ids are still
+not comparable between batches and the same RFI family appears several times
+(they are merely distinct now, not matched); and scaling had to be added beyond
+GLOBULAR's spec (`--scaling robust`, default) because their transforms alone
+leave feature IQRs spanning 0.036 to 5.88 on our data, so Euclidean distance
+became drift rate and nothing else.
 
 **Next — Track E**: weak-supervision classifier. `features/*_features.parquet`
 already carries `weak_label` (1 RFI / 0 spatially-confined / −1 ambiguous),

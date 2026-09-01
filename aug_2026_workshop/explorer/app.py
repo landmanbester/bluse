@@ -187,10 +187,21 @@ def scale(X, how):
     return X                                  # "none" = GLOBULAR's literal spec
 
 
-def embed(ds, method):
-    if method in ds.embedding:
-        return ds.embedding[method]
-    Z = scale(ds.raw, "robust")
+def embed(ds, method, cols=None, scaling="robust"):
+    """
+    2-D projection for the scatter.
+
+    This used to hardcode scale(ds.raw, "robust") over ALL columns, so the plot
+    geometry was frozen: turning features off or switching the scaling could not
+    move a single point, which made every run look alike no matter what the
+    clusterer actually did. It now projects exactly the matrix HDBSCAN sees.
+    """
+    cols = list(ds.columns) if cols is None else list(cols)
+    ck = (method, scaling, tuple(cols))
+    if ck in ds.embedding:
+        return ds.embedding[ck]
+    use = [ds.columns.index(c) for c in cols]
+    Z = scale(ds.raw[:, use], scaling)
     if method == "umap":
         try:
             import umap
@@ -203,34 +214,47 @@ def embed(ds, method):
     emb = np.asarray(emb, dtype=np.float32)
     lo, hi = emb.min(axis=0), emb.max(axis=0)
     span = np.where(hi - lo > 1e-9, hi - lo, 1.0)
-    ds.embedding[method] = ((emb - lo) / span).astype(np.float32)
-    return ds.embedding[method]
+    ds.embedding[ck] = ((emb - lo) / span).astype(np.float32)
+    return ds.embedding[ck]
 
 
-def run_hdbscan(X, mcs, ms, eps):
-    """Retry with epsilon=0 on the sklearn epsilon-search bug (see AGENTS.md)."""
-    kw = dict(min_cluster_size=mcs, min_samples=ms,
-              cluster_selection_method="eom", n_jobs=-1)
+def run_hdbscan(X, mcs, ms):
+    """
+    One HDBSCAN pass.
+
+    cluster_selection_epsilon is deliberately absent. sklearn's epsilon_search
+    (_tree.pyx:606) compares epsilon against the RECIPROCAL of a leaf's split
+    distance, not the distance. Leaf splits in this feature space are >~1.7, so
+    1/d is ~0.55: every epsilon below that leaves the leaf set bit-identical to
+    epsilon=0, and every epsilon above it reaches traverse_upwards, which
+    assigns length-1 arrays into scalar cdefs and raises
+
+        TypeError: only 0-dimensional arrays can be converted to Python scalars
+
+    The no-op region and the crash region tile the domain -- there is no value
+    that both works and does not crash -- so the knob is gone rather than
+    re-ranged. Measured: eps 0.0/0.05/0.18/0.5 give ARI 1.000 against each
+    other; 5.0 raises on 14/14 batches.
+    """
     try:
-        return HDBSCAN(cluster_selection_epsilon=eps, **kw).fit_predict(X)
+        return HDBSCAN(min_cluster_size=mcs, min_samples=ms,
+                       cluster_selection_method="eom", n_jobs=-1).fit_predict(X)
     except (TypeError, ValueError):
-        try:
-            return HDBSCAN(cluster_selection_epsilon=0.0, **kw).fit_predict(X)
-        except (TypeError, ValueError):
-            return np.full(len(X), -1, dtype=np.int32)
+        return np.full(len(X), -1, dtype=np.int32)
 
 
-def cluster(ds, cols, scaling, mode, mcs, ms, eps, epochs, batch, seed):
+def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
     use = [ds.columns.index(c) for c in cols]
     X = scale(ds.raw[:, use], scaling)
     n = len(X)
     labels = np.full(n, -1, dtype=np.int32)
 
     if mode == "single":
-        labels = run_hdbscan(X, mcs, ms, eps).astype(np.int32)
+        labels = run_hdbscan(X, mcs, ms).astype(np.int32)
     else:
         alive = np.arange(n)
         rng = np.random.default_rng(seed)
+        next_id = 0
         for ep in range(1, epochs + 1):
             rng.shuffle(alive)
             survivors = []
@@ -239,9 +263,19 @@ def cluster(ds, cols, scaling, mode, mcs, ms, eps, epochs, batch, seed):
                 if len(b) < mcs * 2:
                     survivors.append(b)
                     continue
-                lab = run_hdbscan(X[b], mcs, ms, eps)
+                lab = run_hdbscan(X[b], mcs, ms)
                 hit = lab >= 0
-                labels[b[hit]] = lab[hit] + ep * 100_000
+                if hit.any():
+                    # HDBSCAN mints local ids 0..k-1 in EVERY batch. The old
+                    # code offset by epoch only, so batch 0's cluster 3 and
+                    # batch 7's cluster 3 both became 100003 and were fused.
+                    # On sband_short that collapsed 731 real groups into 205
+                    # reported ones -- 526 unrelated clusters merged, which is
+                    # why the top ids carried the GLOBAL medians and why
+                    # n_clusters tracked max-over-batches instead of the total.
+                    # A running offset keeps every batch's clusters distinct.
+                    labels[b[hit]] = lab[hit] + next_id
+                    next_id += int(lab[hit].max()) + 1
                 survivors.append(b[~hit])
             alive = np.concatenate(survivors) if survivors else np.array([], int)
             if len(alive) < mcs * 2:
@@ -296,9 +330,12 @@ def pick_dataset(request: Request, file: str = Form(...),
             f'<p class="error">No feature file for {file}. '
             f'Run <code>python track_b_features.py</code> first.</p>')
 
-    Z = scale(ds.raw, "robust")
-    q75, q25 = np.percentile(Z, [75, 25], axis=0)
-    iqr_scaled = q75 - q25
+    # Raw spread only. The rail used to compute a scaled IQR here, never use
+    # it, and caption the raw bars "after scaling" -- which is false in the
+    # worst way: robust scaling divides each column BY its IQR, so every scaled
+    # IQR is exactly 1.000 and the bars would all be equal. What the bars
+    # actually show is how unequal the columns are BEFORE scaling, i.e. what
+    # the scaling control is there to fix.
     q75r, q25r = np.percentile(ds.raw, [75, 25], axis=0)
     iqr_raw = q75r - q25r
 
@@ -322,13 +359,24 @@ def pick_dataset(request: Request, file: str = Form(...),
     })
 
 
+def emb_sig(method, scaling, cols):
+    """Identity of an embedding; the client refetches when this changes."""
+    return hashlib.sha1(json.dumps([method, scaling, sorted(cols)]).encode()
+                        ).hexdigest()[:12]
+
+
 @app.get("/embedding.bin")
-def embedding_bin(key: str, method: str = "pca"):
+def embedding_bin(request: Request, key: str, method: str = "pca",
+                  scaling: str = "robust"):
     ds = DATASETS.get(key)
     if ds is None:
         return Response(status_code=404)
-    return Response(embed(ds, method).tobytes(),
-                    media_type="application/octet-stream")
+    cols = [c for c in request.query_params.getlist("feat") if c in ds.columns]
+    if len(cols) < 2:
+        cols = list(ds.columns)
+    return Response(embed(ds, method, cols, scaling).tobytes(),
+                    media_type="application/octet-stream",
+                    headers={"X-Emb-Sig": emb_sig(method, scaling, cols)})
 
 
 @app.post("/cluster", response_class=HTMLResponse)
@@ -346,8 +394,15 @@ async def do_cluster(request: Request):
 
     p = dict(scaling=form.get("scaling", "robust"),
              mode=form.get("mode", "epochs"),
-             mcs=int(form.get("mcs", 4)), ms=int(form.get("ms", 2)),
-             eps=float(form.get("eps", 0.18)),
+             mcs=int(form.get("mcs", 4)),
+             # min_samples defaults to 8, not 2. sklearn counts the point
+             # itself, so ms=1 and ms=2 are the same call: no core-distance
+             # smoothing at all, i.e. pure single linkage. That put EOM on a
+             # knife edge -- identical 3000-point draws returned either k=2
+             # holding 99.7% of points or ~200 microclusters with 40% noise,
+             # a 112x swing on the shuffle alone. ms=8 collapses that to
+             # k in [2,12]. See AGENTS.md.
+             ms=int(form.get("ms", 8)),
              epochs=int(form.get("epochs", 8)),
              batch=int(form.get("batch", 3000)),
              seed=int(form.get("seed", 0)))
@@ -358,7 +413,7 @@ async def do_cluster(request: Request):
     if not cached:
         t0 = time.time()
         labels, _ = cluster(ds, cols, p["scaling"], p["mode"], p["mcs"],
-                            p["ms"], p["eps"], p["epochs"], p["batch"], p["seed"])
+                            p["ms"], p["epochs"], p["batch"], p["seed"])
         elapsed = time.time() - t0
         summary = summarise(ds.df, labels)
         noise = labels == -1
@@ -387,8 +442,12 @@ async def do_cluster(request: Request):
     })
     # The client needs the size order to colour by rank; 12 ints is cheap.
     top = [int(c) for c in run.summary["cluster"].head(TOP_N)]
-    resp.headers["HX-Trigger"] = json.dumps(
-        {"clusterDone": {"run": run.run_id, "top": top}})
+    resp.headers["HX-Trigger"] = json.dumps({"clusterDone": {
+        "run": run.run_id, "top": top,
+        # The embedding now depends on the feature set and the scaling, so the
+        # client has to know when the geometry it is showing went stale.
+        "emb": emb_sig(form.get("embed", "pca"), p["scaling"], cols),
+    }})
     return resp
 
 

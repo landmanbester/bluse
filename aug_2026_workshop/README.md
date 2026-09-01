@@ -132,21 +132,28 @@ python explorer/app.py --port 8080 --host 0.0.0.0   # share on the LAN
 FastAPI + htmx + a canvas scatter. Pick a file, toggle features, adjust
 HDBSCAN, press **Cluster**. A re-cluster on a 35k sample takes ~1.2 s.
 
-**The feature rail is the point.** Each feature shows its interquartile range
-as a bar, because the Euclidean metric HDBSCAN uses is a sum of those spreads —
-so the widest bar is the feature doing most of the clustering. On
-`sband_short`, `f02_abs_drift` measures 5.954 against `f03_snr` at 0.092. That
-is why the defaults produced two clusters holding 90% of the data, and it is
-not something you can see in a static run. Toggle a feature and watch the bars
-renormalise.
+**The feature rail.** Each feature shows its interquartile range as a bar —
+the *raw* spread, before scaling. On `sband_short`, `f02_abs_drift` measures
+5.954 against `f03_snr` at 0.092, a 65× imbalance. Since HDBSCAN's Euclidean
+metric is a sum of those spreads, under `scaling: none` the widest bar simply
+is the clustering. `robust` divides them out so every feature counts equally,
+which is why it is the default.
+
+(The bars used to be captioned "after scaling", which was false in the worst
+way: robust scaling divides each column *by* its IQR, so every scaled IQR is
+exactly 1.000 and the bars would all be equal. They show what the scaling
+control exists to fix, not what HDBSCAN sees.)
 
 Also exposed, in rough order of how much they matter: **scaling** (robust /
-quantile / GLOBULAR-literal), **mode** (epochs / single), then
-`min_cluster_size`, `min_samples`, `epsilon`, `batch`, `epochs`.
+quantile / GLOBULAR-literal), **mode** (epochs / single), then `batch`,
+`min_samples`, `min_cluster_size`, `epochs`, `seed`. There is no `epsilon`
+control — see gotcha 9 in `AGENTS.md` for why it cannot work.
 
-How it works: the embedding is computed once per dataset and never recomputed,
-so changing hyperparameters ships an Int32Array of labels and recolours in
-place — points crossfade over 260 ms so you can see which ones changed cluster.
+How it works: the embedding projects exactly the matrix HDBSCAN sees, so it is
+cached per (method, scaling, feature set) and refetched only when one of those
+changes. A re-cluster at the same geometry ships an Int32Array of labels and
+recolours in place — points crossfade over 260 ms so you can see which ones
+changed cluster.
 Every run is cached by parameter hash, so the run history is free and revisiting
 a configuration is instant. Click a point for its waterfall; click a table row
 to zoom to that cluster.

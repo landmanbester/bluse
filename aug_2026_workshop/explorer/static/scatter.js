@@ -19,6 +19,7 @@ const NOISE = '#39424f';
 const MINOR = '#5c6779';
 let rank = null;   // Map(label -> size rank), set by loadLabels
 let focused = null;   // cluster label isolated by clicking a table row
+let embSig = '';      // signature of the embedding currently on screen
 
 let emb = null, labels = null, prevRGB = null, curRGB = null;
 let view = { x: 0, y: 0, k: 1 };
@@ -150,12 +151,29 @@ function nearest(mx, my) {
   return best;
 }
 
+/* The embedding now projects exactly the matrix HDBSCAN sees, so it depends on
+ * the feature set and the scaling as well as the method. The server stamps each
+ * one with a signature; when a run comes back under a different signature the
+ * geometry on screen is stale and has to be refetched before the labels. */
+function embedQuery() {
+  const q = new URLSearchParams();
+  q.set('key', window.DSKEY);
+  q.set('method', (document.getElementById('embed-method') || {}).value || 'pca');
+  const f = document.getElementById('cluster-form');
+  if (f) {
+    const fd = new FormData(f);
+    q.set('scaling', fd.get('scaling') || 'robust');
+    fd.getAll('feat').forEach(v => q.append('feat', v));
+  }
+  return q;
+}
+
 async function loadEmbedding() {
   if (!window.DSKEY) return;
-  const method = (document.getElementById('embed-method') || {}).value || 'pca';
   document.getElementById('hud').innerHTML = 'loading embedding…';
-  const res = await fetch(`/embedding.bin?key=${encodeURIComponent(window.DSKEY)}&method=${method}`);
+  const res = await fetch('/embedding.bin?' + embedQuery().toString());
   if (!res.ok) { document.getElementById('hud').innerHTML = ''; return; }
+  embSig = res.headers.get('X-Emb-Sig') || '';
   emb = new Float32Array(await res.arrayBuffer());
   labels = null; curRGB = null; prevRGB = null;
   view = { x: 0, y: 0, k: 1 };
@@ -276,9 +294,10 @@ window.addEventListener('DOMContentLoaded', () => {
       .then(html => { const el = document.getElementById('hit'); if (el) el.innerHTML = html; });
   });
 
-  document.body.addEventListener('clusterDone', e => {
+  document.body.addEventListener('clusterDone', async e => {
     rank = e.detail.top ? new Map(e.detail.top.map((l, i) => [l, i])) : null;
     focused = null;
+    if (e.detail.emb && e.detail.emb !== embSig) await loadEmbedding();
     loadLabels(e.detail.run);
   });
   window.addEventListener('keydown', e => {
