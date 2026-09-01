@@ -47,6 +47,10 @@ from sklearn.decomposition import PCA
 
 from .. import features as F
 from .. import paths
+# scale() lives in diagnostics so the Bench and the CLI cannot drift
+# apart on the one thing that matters most to the metric.
+from .. import metrics
+from ..diagnostics import scale
 
 # Static assets and templates ship inside the wheel, so they -- and only they --
 # are still located relative to this file. Everything the user supplies (feature
@@ -114,6 +118,7 @@ class Run:
     stats: dict
     params: dict
     rank: dict = field(default_factory=dict)   # cluster label -> size rank
+    epochs: list = field(default_factory=list)   # rendered epoch trace
 
 
 DATASETS: dict[str, Dataset] = {}
@@ -169,28 +174,6 @@ def load_dataset(name, sample, seed):
     return ds
 
 
-def scale(X, how):
-    """
-    Equalise how much each feature contributes to the Euclidean distance.
-
-    This is the control that matters most. See feature_matrix() in
-    track_b_cluster.py for the measurements behind that claim.
-    """
-    X = np.array(X, copy=True)
-    if how == "robust":
-        med = np.median(X, axis=0)
-        q75, q25 = np.percentile(X, [75, 25], axis=0)
-        iqr = np.where((q75 - q25) > 1e-12, q75 - q25, 1.0)
-        return np.clip((X - med) / iqr, -5, 5)
-    if how == "quantile":
-        from sklearn.preprocessing import QuantileTransformer
-        qt = QuantileTransformer(output_distribution="uniform",
-                                 n_quantiles=min(1000, len(X)),
-                                 subsample=200_000, random_state=0)
-        return qt.fit_transform(X)
-    return X                                  # "none" = GLOBULAR's literal spec
-
-
 def embed(ds, method, cols=None, scaling="robust"):
     """
     2-D projection for the scatter.
@@ -222,7 +205,7 @@ def embed(ds, method, cols=None, scaling="robust"):
     return ds.embedding[ck]
 
 
-def run_hdbscan(X, mcs, ms):
+def run_hdbscan(X, mcs, ms, method="eom"):
     """
     One HDBSCAN pass.
 
@@ -239,6 +222,26 @@ def run_hdbscan(X, mcs, ms):
     that both works and does not crash -- so the knob is gone rather than
     re-ranged. Measured: eps 0.0/0.05/0.18/0.5 give ARI 1.000 against each
     other; 5.0 raises on 14/14 batches.
+
+    `method` selects EOM or leaf extraction, and it is a genuine USER CHOICE
+    rather than a default waiting to be tuned, because the two win on different
+    axes. With allow_single_cluster=False, EOM makes one stability comparison at
+    the root of the condensed tree: either the root's two children win (k=2) or
+    it descends to the leaves (k~200), with nothing in between BY CONSTRUCTION.
+    Raising min_samples biases which side of that knife edge you land on but
+    does not remove it. leaf takes the condensed tree's leaves directly, never
+    makes the root comparison, and is not bistable.
+
+    Measured on sband_short, 3 seeds -- narrow-cluster share, and membership
+    ARI after matching at the p50 cut:
+
+                    clusters  narrow %   family ARI
+        eom               72     0.776        0.519
+        leaf           2,162     6.820        0.108
+
+    leaf wins coherence 8.8x; eom-plus-matching wins reproducibility 4.8x.
+    Which you want depends on whether you are building a taxonomy or ranking
+    candidates, so the tool asks rather than deciding.
     """
     # Built OUTSIDE the try: an unsupported keyword raises TypeError at
     # construction, and the except below would otherwise swallow it and hand
@@ -247,7 +250,7 @@ def run_hdbscan(X, mcs, ms):
     # FutureWarning; it is inert for us because it only applies when
     # metric="precomputed", and ours is euclidean.
     est = HDBSCAN(min_cluster_size=mcs, min_samples=ms,
-                  cluster_selection_method="eom",
+                  cluster_selection_method=method,
                   copy=True,
                   n_jobs=-1)
     try:
@@ -256,11 +259,13 @@ def run_hdbscan(X, mcs, ms):
         return np.full(len(X), -1, dtype=np.int32)
 
 
-def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
+def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed,
+            method="eom"):
     use = [ds.columns.index(c) for c in cols]
     X = scale(ds.raw[:, use], scaling)
     n = len(X)
     labels = np.full(n, -1, dtype=np.int32)
+    trace = []
 
     # origin[cluster_id] = (epoch, batch) it was discovered in. Cluster ids are
     # a discovery-order serial, NOT a batch number -- one batch usually mints
@@ -268,9 +273,10 @@ def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
     origin = {}
 
     if mode == "single":
-        labels = run_hdbscan(X, mcs, ms).astype(np.int32)
+        labels = run_hdbscan(X, mcs, ms, method).astype(np.int32)
         for c in np.unique(labels[labels >= 0]):
             origin[int(c)] = (1, 0)
+        trace = [int((labels < 0).sum())]
     else:
         alive = np.arange(n)
         rng = np.random.default_rng(seed)
@@ -283,7 +289,7 @@ def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
                 if len(b) < mcs * 2:
                     survivors.append(b)
                     continue
-                lab = run_hdbscan(X[b], mcs, ms)
+                lab = run_hdbscan(X[b], mcs, ms, method)
                 hit = lab >= 0
                 if hit.any():
                     # HDBSCAN mints local ids 0..k-1 in EVERY batch. The old
@@ -300,10 +306,17 @@ def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
                     next_id += int(lab[hit].max()) + 1
                 survivors.append(b[~hit])
             alive = np.concatenate(survivors) if survivors else np.array([], int)
+            trace.append(int(len(alive)))
             if len(alive) < mcs * 2:
                 break
         labels[alive] = -1
-    return labels, X, origin
+    return labels, X, origin, trace
+
+
+def summarise_basic(labels):
+    """Cluster ids and sizes only. Used where no provenance frame is at hand."""
+    ids, counts = np.unique(labels[labels >= 0], return_counts=True)
+    return pd.DataFrame({"cluster": ids.astype(int), "n": counts.astype(int)})
 
 
 def summarise(df, labels, origin=None):
@@ -438,6 +451,11 @@ async def do_cluster(request: Request):
 
     p = dict(scaling=form.get("scaling", "robust"),
              mode=form.get("mode", "epochs"),
+             # eom or leaf. A USER CHOICE, not a default awaiting tuning:
+             # measured on sband_short, leaf wins coherence 8.8x (narrow share
+             # 6.820% against 0.776%) while eom-plus-matching wins
+             # reproducibility 4.8x (family ARI 0.519 against 0.108).
+             csm=form.get("csm", "eom"),
              mcs=int(form.get("mcs", 4)),
              # min_samples defaults to 8, not 2. sklearn counts the point
              # itself, so ms=1 and ms=2 are the same call: no core-distance
@@ -456,22 +474,23 @@ async def do_cluster(request: Request):
     cached = sig in RUNS
     if not cached:
         t0 = time.time()
-        labels, _, origin = cluster(ds, cols, p["scaling"], p["mode"], p["mcs"],
-                                    p["ms"], p["epochs"], p["batch"], p["seed"])
+        labels, _, origin, trace = cluster(ds, cols, p["scaling"], p["mode"],
+                                           p["mcs"], p["ms"], p["epochs"],
+                                           p["batch"], p["seed"], p["csm"])
         elapsed = time.time() - t0
         summary = summarise(ds.df, labels, origin)
         noise = labels == -1
         conf = noise & (ds.df.n_beams.to_numpy() <= 4)
         rank = {int(c): i for i, c in enumerate(summary["cluster"])}
-        RUNS[sig] = Run(sig, labels, summary, {
-            "n": len(labels),
-            "n_clusters": int(len(summary)),
-            "clustered_pct": float((labels >= 0).mean() * 100),
+        stats = dict(metrics.quality(labels, ds.df))
+        stats.update({
             "noise": int(noise.sum()),
             "confined": int(conf.sum()),
             "seconds": elapsed,
             "n_features": len(cols),
-        }, p, rank)
+        })
+        RUNS[sig] = Run(sig, labels, summary, stats, p, rank,
+                        metrics.epoch_trace(trace, len(labels)))
         if sig in HISTORY:
             HISTORY.remove(sig)
         HISTORY.insert(0, sig)

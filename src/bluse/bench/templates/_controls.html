@@ -46,6 +46,21 @@
       <option value="single">single — one pass</option>
     </select>
   </label>
+  <!-- Not a default awaiting tuning. The two win on DIFFERENT axes, measured
+       on sband_short over 3 seeds, so the tool asks instead of deciding. -->
+  <label class="field"><span>cluster_selection_method</span>
+    <select name="csm">
+      <option value="eom" selected>eom — few clusters, reproducible</option>
+      <option value="leaf">leaf — many clusters, coherent</option>
+    </select>
+  </label>
+  <p style="font-family:var(--mono);font-size:10px;color:var(--dimmer);margin:-4px 0 8px">
+    <b>eom</b> 72 clusters · 0.78% narrow · family ARI 0.52<br>
+    <b>leaf</b> 2162 clusters · 6.82% narrow · family ARI 0.11<br>
+    <span style="opacity:.8">leaf groups more coherently in frequency; eom
+    reproduces better across seeds once families are matched. Pick leaf to
+    build a taxonomy, eom to rank candidates.</span>
+  </p>
   <div class="row2">
     <label class="field"><span>min_cluster_size</span>
       <input type="number" name="mcs" value="4" min="2"></label>

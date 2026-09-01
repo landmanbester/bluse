@@ -167,7 +167,8 @@ def run_hdbscan(X, args):
     # metric="precomputed", and ours is euclidean.
     est = HDBSCAN(min_cluster_size=args.min_cluster_size,
                   min_samples=args.min_samples,
-                  cluster_selection_method="eom",
+                  cluster_selection_method=getattr(
+                      args, "cluster_selection_method", "eom"),
                   copy=True,
                   n_jobs=-1)
     try:
@@ -203,6 +204,7 @@ def cluster_epochs(df, args):
     rng = np.random.default_rng(args.seed)
     labels = np.full(len(df), -2, dtype=np.int32)
     epoch_of = np.full(len(df), -1, dtype=np.int32)
+    trace = []
     next_id = 0
     print(f"  epoch 0: {len(alive):,} hits, {len(cols)} features")
 
@@ -227,13 +229,14 @@ def cluster_epochs(df, args):
                 epoch_of[b[clustered]] = ep
             survivors.append(b[~clustered])
         alive = np.concatenate(survivors) if survivors else np.array([], int)
+        trace.append(int(len(alive)))
         pct = 100 * len(alive) / max(1, int(good.sum()))
         print(f"  epoch {ep}: {len(alive):,} remaining ({pct:.1f}%)")
         if len(alive) < args.min_cluster_size * 2:
             break
     labels[alive] = -1                                  # never clustered
     epoch_of[alive] = args.epochs + 1
-    return labels, cols, epoch_of
+    return labels, cols, epoch_of, trace
 
 
 def summarise(df, labels, outdir, tag):
@@ -369,6 +372,15 @@ def main():
                    help="how to equalise feature contribution before the "
                         "Euclidean distance. 'none' is GLOBULAR's literal spec "
                         "and clusters poorly here -- see feature_matrix()")
+    p.add_argument("--cluster-selection-method", choices=["eom", "leaf"],
+                   default="eom",
+                   help="EOM (default) or leaf extraction from the condensed "
+                        "tree. A genuine choice, not a default awaiting "
+                        "tuning: measured on sband_short, leaf wins coherence "
+                        "8.8x (narrow-cluster share 6.82%% against 0.78%%) "
+                        "while eom plus --match wins reproducibility 4.8x "
+                        "(family ARI 0.519 against 0.108). Pick leaf to build "
+                        "a taxonomy, eom to rank candidates")
     p.add_argument("--seed", type=int, default=0)
     paths.add_workspace_arg(p)
     args = p.parse_args()
@@ -388,9 +400,10 @@ def main():
     print(f"{tag}: {len(df):,} hits with usable features")
 
     if args.mode == "epochs":
-        labels, cols, _ = cluster_epochs(df, args)
+        labels, cols, _, trace = cluster_epochs(df, args)
     else:
         labels, cols = cluster_single(df, args)
+        trace = [int((labels < 0).sum())]
 
     summarise(df, labels, args.outdir, tag)
     plot(df, labels, cols, args.outdir, tag, args.scaling)
