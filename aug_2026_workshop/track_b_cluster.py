@@ -165,12 +165,20 @@ def run_hdbscan(X, args):
 
     GLOBULAR's 0.18 was chosen for their feature scaling, not ours.
     """
+    # Built OUTSIDE the try: an unsupported keyword raises TypeError at
+    # construction, and the except below would otherwise swallow it and hand
+    # back an all-noise result that looks like a legitimate clustering.
+    # copy=True matches sklearn's future default (1.10) and silences its
+    # FutureWarning; it is inert for us because it only applies when
+    # metric="precomputed", and ours is euclidean.
+    est = HDBSCAN(min_cluster_size=args.min_cluster_size,
+                  min_samples=args.min_samples,
+                  cluster_selection_method="eom",
+                  copy=True,
+                  n_jobs=-1)
     try:
-        return HDBSCAN(min_cluster_size=args.min_cluster_size,
-                       min_samples=args.min_samples,
-                       cluster_selection_method="eom",
-                       n_jobs=-1).fit_predict(X)
-    except (TypeError, ValueError):
+        return est.fit_predict(X)
+    except ValueError:
         return np.full(len(X), -1, dtype=np.int32)
 
 

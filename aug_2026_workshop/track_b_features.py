@@ -329,6 +329,10 @@ def deduplicate(all_df):
     was drawn from, so the larger file is the parent; and mk_sample_hits, the
     offender here, is pre-filtered (0% zero-drift where the others have 22-47%)
     and so is the copy we least want to keep.
+
+    That heuristic is WRONG for a corrupt original vs its *_clean replacement,
+    where the bigger file is the bad one. drop_superseded() runs first and
+    removes those by name, so this function never has to arbitrate them.
     """
     if "id" not in all_df.columns:
         print("  no `id` column -- cannot deduplicate")
@@ -354,9 +358,36 @@ def deduplicate(all_df):
     return out.reset_index(drop=True)
 
 
+def drop_superseded(all_df):
+    """
+    Never let a corrupt original outvote its *_clean replacement.
+
+    deduplicate() ranks files by row count, and the corrupt original WINS that
+    contest: lband_short.h5 yields 866,002 feature rows (404,000 of them with
+    stamp_ok=False, since metadata features are computed even where the stamp
+    cube is unreadable) against lband_short_clean.h5's 463,625. Pooling both
+    would therefore silently swap 463,625 good rows for 462,002 good ones plus
+    404,000 stamp-less ones -- the exact opposite of the intent.
+
+    So the *_clean file wins by name, before row counts are consulted.
+    """
+    if "file" not in all_df.columns:
+        return all_df
+    present = set(all_df["file"].unique())
+    superseded = {f for f in present if f + "_clean" in present}
+    if not superseded:
+        return all_df
+    for f in sorted(superseded):
+        n = int((all_df["file"] == f).sum())
+        print(f"  dropping {n:,} rows from '{f}' -- superseded by "
+              f"'{f}_clean' (see AGENTS.md gotcha 7)")
+    return all_df[~all_df["file"].isin(superseded)].reset_index(drop=True)
+
+
 def summarise(frames, outdir, dedupe=True):
     """Print feature health, then write the combined table Track E will read."""
     all_df = pd.concat(frames, ignore_index=True)
+    all_df = drop_superseded(all_df)
     if dedupe:
         all_df = deduplicate(all_df)
     cols = F.all_columns()

@@ -236,10 +236,19 @@ def run_hdbscan(X, mcs, ms):
     re-ranged. Measured: eps 0.0/0.05/0.18/0.5 give ARI 1.000 against each
     other; 5.0 raises on 14/14 batches.
     """
+    # Built OUTSIDE the try: an unsupported keyword raises TypeError at
+    # construction, and the except below would otherwise swallow it and hand
+    # back an all-noise result that looks like a legitimate clustering.
+    # copy=True matches sklearn's future default (1.10) and silences its
+    # FutureWarning; it is inert for us because it only applies when
+    # metric="precomputed", and ours is euclidean.
+    est = HDBSCAN(min_cluster_size=mcs, min_samples=ms,
+                  cluster_selection_method="eom",
+                  copy=True,
+                  n_jobs=-1)
     try:
-        return HDBSCAN(min_cluster_size=mcs, min_samples=ms,
-                       cluster_selection_method="eom", n_jobs=-1).fit_predict(X)
-    except (TypeError, ValueError):
+        return est.fit_predict(X)
+    except ValueError:
         return np.full(len(X), -1, dtype=np.int32)
 
 

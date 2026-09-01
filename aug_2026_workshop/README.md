@@ -42,8 +42,11 @@ Two practical notes:
   less snappy while feature extraction gets much quicker.
 - **Don't let both versions into one run.** `track_b_features.py` with no
   arguments globs `data/*.h5` and would ingest the old and the clean file as
-  two datasets covering the same hits. Name files explicitly, or move the
-  superseded original out of `data/` first.
+  two datasets covering the same hits — and the *corrupt* one would win the
+  tie-break, because it has more rows (866,002, of which 404,000 have no
+  readable stamp) than the clean file's 463,625. `drop_superseded()` now
+  removes any `X` whenever `X_clean` is present and prints what it dropped, so
+  this is safe by default. Still cleanest to move the original aside.
 
 Track A has already been re-run on the clean file, so
 `catalogues/lband_short_clean_cat.parquet` exists and feature extraction will

@@ -187,12 +187,22 @@ across the whole delivery and stable between the HDF5 files and
    1,623 rows *more* than skipping the block wholesale did, because
    `scan_bad_regions()` probes every 2,000 rows and so over-skips at the edges.
 
-   **Hazard when re-running.** A bare `track_b_features.py` globs `data/*.h5`
-   and will ingest `lband_short.h5` *and* `lband_short_clean.h5` as two
-   datasets covering the same hits. `deduplicate()` keeps whichever file
-   yielded more rows, which is the clean one — but only by ~1,600 rows out of
-   463,625. Do not lean on that margin. **Name the files explicitly, or move
-   the superseded originals out of `data/`.**
+   **Hazard when re-running — now guarded, but understand it.** A bare
+   `track_b_features.py` globs `data/*.h5` and would ingest `lband_short.h5`
+   *and* `lband_short_clean.h5` as two datasets covering the same hits.
+   `deduplicate()` ranks files by row count, and **the corrupt original wins
+   that contest**: it yields 866,002 feature rows (404,000 with
+   `stamp_ok=False`, because metadata features are computed even where the
+   stamp cube is unreadable) against the clean file's 463,625. Pooling both
+   would silently trade 463,625 good rows for 462,002 good plus 404,000
+   stamp-less ones.
+
+   `drop_superseded()` now removes any `X` when `X_clean` is also present,
+   **by name, before row counts are consulted**, and says so on stdout. Still
+   prefer to move superseded originals out of `data/` — and note that
+   `--combine-only` globs `features/*_features.parquet`, so a stale
+   `lband_short_features.parquet` left on disk is picked up too (the guard
+   catches it, but delete it and avoid the question).
 
    Keep `scan_bad_regions()` regardless: `uhf_long.h5` still needs it.
 
