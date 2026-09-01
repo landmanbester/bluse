@@ -143,6 +143,7 @@ Two constraints, both measured:
 
 Note the boolean introduces a 0.734 tie by construction, which is why the
 feature registry's `kind` field exists — tie thresholds skip `boolean`.
+
 ### 5. Contribution-equalising scaling mode
 Robust scaling equalises the **IQR**, but HDBSCAN responds to **variance**, and
 the IQR-to-variance ratio depends on distribution shape — so contributions run
@@ -154,7 +155,6 @@ proxy. Evaluate against `narrow_frac` and `ari_restricted`, not by eye.
 `eom` it collapses the run, entirely because it amplifies `f02`'s 26.6% tie
 5.2×. Weight caps do not rescue it. Report per method; it is not a universal
 improvement.
-
 
 ---
 
