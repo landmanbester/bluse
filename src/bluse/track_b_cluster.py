@@ -91,6 +91,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from . import features as F
+from . import matching
 from . import paths
 
 
@@ -381,6 +382,20 @@ def main():
                         "while eom plus --match wins reproducibility 4.8x "
                         "(family ARI 0.519 against 0.108). Pick leaf to build "
                         "a taxonomy, eom to rank candidates")
+    p.add_argument("--match", action="store_true",
+                   help="group clusters into families by Ward linkage on "
+                        "centroids. Cluster ids are batch artefacts -- one "
+                        "population is minted afresh per batch and epoch -- so "
+                        "families are the level at which that cancels. "
+                        "Measured on sband_short/eom, membership ARI across "
+                        "seeds goes 0.028 -> 0.519")
+    p.add_argument("--match-cut", type=float, default=None,
+                   help="explicit linkage distance cut. Default: derived from "
+                        "the Ward merge-height distribution")
+    p.add_argument("--match-pct", type=int, default=50,
+                   help="percentile of the merge heights used as the cut when "
+                        "--match-cut is not given. Higher = fewer, broader "
+                        "families; p50 is where the reproducibility gain peaks")
     p.add_argument("--seed", type=int, default=0)
     paths.add_workspace_arg(p)
     args = p.parse_args()
@@ -404,6 +419,19 @@ def main():
     else:
         labels, cols = cluster_single(df, args)
         trace = [int((labels < 0).sum())]
+
+    if args.match:
+        # main() does not hold the scaled matrix -- feature_matrix is called
+        # inside the clustering functions -- so recompute it on the columns
+        # actually used. summarise() writes df to <tag>_clusters.parquet, so
+        # the family column travels with the per-hit output for free.
+        X, _, _ = feature_matrix(df, columns=cols, scaling=args.scaling)
+        fam, minfo = matching.match(labels, X, cut=args.match_cut,
+                                    pct=args.match_pct)
+        df["family"] = fam
+        print(f"  matched {minfo['n_clusters']:,} clusters -> "
+              f"{minfo['n_families']:,} families at cut {minfo['cut']:.3f} "
+              f"({minfo['cut_source']})")
 
     summarise(df, labels, args.outdir, tag)
     plot(df, labels, cols, args.outdir, tag, args.scaling)

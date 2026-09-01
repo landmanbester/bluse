@@ -22,6 +22,21 @@
       class="spinner-text">working</span></div></div>
 </div>
 
+{% if run.match_info %}
+<p class="note"><b>{{ '{:,}'.format(run.match_info.n_clusters) }} raw clusters
+  &rarr; {{ '{:,}'.format(run.match_info.n_families) }} families</b>
+  at cut {{ '%.3f'|format(run.match_info.cut) }}
+  ({{ run.match_info.cut_source }}); narrow share
+  {{ '%.2f'|format(run.match_info.family_narrow_frac * 100) }}%, median family
+  span {{ '%.1f'|format(run.match_info.family_median_span_mhz) }} MHz.
+  <br><b>Provisional.</b> Ward runs on centroids in the scaled space, which
+  still carries a 14&times; distance-share spread &mdash;
+  <code>x03_channel_offset</code> at 24.3% and <code>f07_kurt_bw_corr</code> at
+  13.1% &mdash; so these families are grouped substantially by channel offset
+  and by a clipped correlation coefficient. Re-derive after the
+  contribution-equalising scaling lands.</p>
+{% endif %}
+
 <form hx-post="/stability" hx-target="#stability" hx-swap="innerHTML"
       hx-include="#cluster-form" hx-indicator="#results, #spin"
       style="margin:0 0 10px">

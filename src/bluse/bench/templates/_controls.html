@@ -94,6 +94,24 @@
     <div class="field"></div>
   </div>
 
+  <div class="eyebrow">Families</div>
+  <div class="row2">
+    <label class="field"><span>match</span>
+      <select name="match">
+        <option value="off" selected>off</option>
+        <option value="on">on — Ward on centroids</option>
+      </select></label>
+    <label class="field"><span>cut percentile</span>
+      <input type="number" name="match_pct" value="50" min="1" max="99"></label>
+  </div>
+  <p style="font-family:var(--mono);font-size:10px;color:var(--dimmer);margin:-4px 0 8px">
+    groups clusters the batching loop minted separately. Higher percentile =
+    fewer, broader families. Measured on <b>eom</b>/sband_short: p25 gives
+    7.7&times; better reproducibility at unchanged coherence, p50 gives
+    18.6&times; for a small coherence cost, p90 starts fusing distinct
+    populations.
+  </p>
+
   <button type="submit">Cluster</button>
 </form>
 

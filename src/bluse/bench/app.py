@@ -122,6 +122,8 @@ class Run:
     params: dict
     rank: dict = field(default_factory=dict)   # cluster label -> size rank
     epochs: list = field(default_factory=list)   # rendered epoch trace
+    families: np.ndarray = None
+    match_info: dict = field(default_factory=dict)
 
 
 DATASETS: dict[str, Dataset] = {}
@@ -483,6 +485,8 @@ async def do_cluster(request: Request):
              # 6.820% against 0.776%) while eom-plus-matching wins
              # reproducibility 4.8x (family ARI 0.519 against 0.108).
              csm=form.get("csm", "eom"),
+             match=form.get("match", "off"),
+             match_pct=int(form.get("match_pct", 50)),
              mcs=int(form.get("mcs", 4)),
              # min_samples defaults to 8, not 2. sklearn counts the point
              # itself, so ms=1 and ms=2 are the same call: no core-distance
@@ -516,8 +520,22 @@ async def do_cluster(request: Request):
             "seconds": elapsed,
             "n_features": len(cols),
         })
+        # Cluster ids are batch artefacts -- one physical population is minted
+        # afresh in every batch and every epoch. Families are the level at
+        # which that cancels, measured: eom membership ARI 0.028 -> 0.519.
+        families, match_info = None, {}
+        if p["match"] == "on":
+            Xs = scale(ds.raw[:, [ds.columns.index(c) for c in cols]],
+                       p["scaling"])
+            families, match_info = matching.match(labels, Xs,
+                                                  pct=p["match_pct"])
+            fq = metrics.quality(families, ds.df)
+            match_info["family_narrow_frac"] = fq["narrow_frac"]
+            match_info["family_median_span_mhz"] = fq["median_span_mhz"]
+
         RUNS[sig] = Run(sig, labels, summary, stats, p, rank,
-                        metrics.epoch_trace(trace, len(labels)))
+                        metrics.epoch_trace(trace, len(labels)),
+                        families, match_info)
         if sig in HISTORY:
             HISTORY.remove(sig)
         HISTORY.insert(0, sig)
