@@ -84,3 +84,26 @@ def test_single_cluster_is_a_single_family():
     fam, info = matching.match(labels, X)
     assert info["n_families"] == 1
     assert (fam == 0).all()
+
+
+def test_info_always_carries_cut_source():
+    """
+    The CLI indexes info['cut_source'] unconditionally, so every return path
+    must set it -- including the all-noise and single-cluster early returns,
+    which previously omitted it and raised KeyError on a valid result.
+    """
+    X = np.random.default_rng(0).normal(size=(50, 3))
+    for labels in (np.full(50, -1, dtype=np.int32),
+                   np.zeros(50, dtype=np.int32)):
+        _, info = matching.match(labels, X)
+        assert "cut_source" in info
+
+
+def test_refuses_a_centroid_count_that_would_exhaust_memory():
+    """Exact Ward is O(k^2) in MEMORY; 78k centroids is a 24 GB matrix."""
+    import pytest
+    n = matching.MAX_CENTROIDS + 10
+    labels = np.arange(n, dtype=np.int32)
+    X = np.random.default_rng(0).normal(size=(n, 2))
+    with pytest.raises(MemoryError, match="condensed"):
+        matching.match(labels, X)

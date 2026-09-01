@@ -274,6 +274,11 @@ async function loadEmbeddingInner() {
   embSig = res.headers.get('X-Emb-Sig') || '';
   emb = new Float32Array(await res.arrayBuffer());
   labels = null; curRGB = null; prevRGB = null;
+  /* Colour-by-value state belongs to the OLD dataset. The rail is re-rendered
+   * with its selector back at "cluster", but if the new sample happens to be
+   * the same length -- normally 35k, so usually -- buildRGB() would keep
+   * painting the new points with the previous file's values. */
+  values = null;
   view = { x: 0, y: 0, k: 1 };
   buildGrid();
   /* Hide the placeholder as soon as there are points: leaving it up meant the

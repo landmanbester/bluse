@@ -28,7 +28,13 @@ TIE_FLAG = 0.10     # flag a continuous/ordinal column tying above this
 CLIP_FLAG = 0.01    # flag a column landing on the clip more often than this
 
 
-def scale(X, how):
+def robust_stats(X):
+    """Median and IQR per column, for fitting a robust scaler on one row set."""
+    q75, q25 = np.percentile(X, [75, 25], axis=0)
+    return {"median": np.median(X, axis=0), "iqr": q75 - q25}
+
+
+def scale(X, how, stats=None):
     """
     Equalise how much each feature contributes to the Euclidean distance.
 
@@ -40,12 +46,19 @@ def scale(X, how):
       "none"      GLOBULAR's literal spec -- their transforms are applied
                   upstream in features.normalise(), so "none" means "the
                   paper's preprocessing and nothing further".
+
+    `stats` is an optional {"median", "iqr"} from robust_stats(), so the fit
+    can come from a different row set than the transform. The Bench uses it to
+    fit on the full population and apply to its 35k sample (D-4). Without it
+    the fit is on whatever is passed, which is what the CLI wants.
     """
     X = np.array(X, copy=True)
     if how == "robust":
-        med = np.median(X, axis=0)
-        q75, q25 = np.percentile(X, [75, 25], axis=0)
-        iqr = np.where((q75 - q25) > 1e-12, q75 - q25, 1.0)
+        if stats is None:
+            stats = robust_stats(X)
+        med = np.asarray(stats["median"])
+        iqr = np.asarray(stats["iqr"])
+        iqr = np.where(iqr > 1e-12, iqr, 1.0)
         return np.clip((X - med) / iqr, -CLIP, CLIP)
     if how == "quantile":
         from sklearn.preprocessing import QuantileTransformer
@@ -120,7 +133,11 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
         j = int(counts.argmax())
         tie = float(counts[j] / len(x))
         kind = kinds.get(col, "continuous")
-        clip_frac = float((np.abs(Z[:, i]) >= CLIP - 1e-12).mean())
+        # Only "robust" clips. Under "none"/"quantile" this test would flag
+        # any raw value with magnitude >= 5, which is not a clip at all --
+        # `bluse-cluster --report --scaling none` reported false clips.
+        clip_frac = (float((np.abs(Z[:, i]) >= CLIP - 1e-12).mean())
+                     if scaling == "robust" else 0.0)
 
         flags = []
         if kind in ("continuous", "ordinal") and tie > TIE_FLAG:

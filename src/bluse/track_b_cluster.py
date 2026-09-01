@@ -344,6 +344,20 @@ def plot(df, labels, cols, outdir, tag, scaling="robust"):
     print(f"  wrote {p}")
 
 
+def _json_safe(obj):
+    """Recursively replace non-finite floats with None, for strict JSON."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (float, np.floating)):
+        f = float(obj)
+        return f if np.isfinite(f) else None
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    return obj
+
+
 def main():
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -401,10 +415,11 @@ def main():
                         "families; p50 is where the reproducibility gain peaks")
     p.add_argument("--seeds", type=int, default=0,
                    help="if >1, re-run across this many seeds and report "
-                        "membership ARI, composite ARI and noise agreement at "
-                        "cluster and family level. Costs one clustering run "
-                        "per seed over the WHOLE file -- on `all` that is "
-                        "1.28M rows and minutes per seed")
+                        "membership ARI, composite ARI and noise agreement. "
+                        "Adds family-level stability when --match is also "
+                        "given. Costs one clustering run per seed over the "
+                        "WHOLE file -- on `all` that is 1.28M rows and minutes "
+                        "per seed")
     p.add_argument("--report", action="store_true",
                    help="print the per-feature diagnostics table and exit "
                         "without clustering")
@@ -473,20 +488,50 @@ def main():
     q = metrics.quality(labels, df)
     q["epochs"] = metrics.epoch_trace(trace, len(labels))
     if args.seeds and args.seeds > 1:
-        def run_fn(seed):
-            a = argparse.Namespace(**vars(args))
-            a.seed = seed
-            lab, _, _, _ = cluster_epochs(df, a)
-            return lab
-        q["stability"] = metrics.stability(run_fn,
-                                           seeds=tuple(range(args.seeds)))
+        # Dispatch through the SAME mode as the primary run. Hardcoding
+        # cluster_epochs meant `--mode single --seeds N` measured the stability
+        # of an algorithm the user had not selected, and ignored --sample.
+        seed_cache = {}
+
+        def _run(seed):
+            if seed not in seed_cache:
+                a = argparse.Namespace(**vars(args))
+                a.seed = seed
+                if args.mode == "epochs":
+                    lab, cs, _, _ = cluster_epochs(df, a)
+                else:
+                    lab, cs = cluster_single(df, a)
+                fam = None
+                if args.match:
+                    Xs, _, _ = feature_matrix(df, columns=cs,
+                                              scaling=args.scaling)
+                    fam = matching.match(lab, Xs, cut=args.match_cut,
+                                         pct=args.match_pct)[0]
+                seed_cache[seed] = (lab, fam)
+            return seed_cache[seed]
+
+        seeds = tuple(range(args.seeds))
+        q["stability"] = metrics.stability(lambda sd: _run(sd)[0], seeds=seeds)
         print(f"  stability over {args.seeds} seeds: "
               f"membership ARI {q['stability']['ari_restricted']:.4f}, "
               f"composite {q['stability']['ari_composite']:.4f}, "
               f"noise agreement {q['stability']['noise_agreement']:.4f}")
+        if args.match:
+            q["stability_families"] = metrics.stability(
+                lambda sd: _run(sd)[1], seeds=seeds)
+            q["stability_families"]["null"] = metrics.coarsening_null(
+                [_run(sd)[0] for sd in seeds], [_run(sd)[1] for sd in seeds])
+            sf = q["stability_families"]
+            print(f"  family stability: membership ARI "
+                  f"{sf['ari_restricted']:.4f} against a coarsening null of "
+                  f"{sf['null']:.4f}")
     mpath = os.path.join(args.outdir, f"{tag}_metrics.json")
     with open(mpath, "w") as fh:
-        json.dump(q, fh, indent=2, default=float)
+        # quality() legitimately returns nan (no labels) and inf (a non-zero
+        # narrow share over a zero null). Python writes those as bare
+        # NaN/Infinity, which is not valid JSON and which strict parsers
+        # reject, so map them to null and refuse to emit them.
+        json.dump(_json_safe(q), fh, indent=2, allow_nan=False)
     print(f"  wrote {mpath}")
 
     plot(df, labels, cols, args.outdir, tag, args.scaling)

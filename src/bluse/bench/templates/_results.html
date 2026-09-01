@@ -29,12 +29,14 @@
   ({{ run.match_info.cut_source }}); narrow share
   {{ '%.2f'|format(run.match_info.family_narrow_frac * 100) }}%, median family
   span {{ '%.1f'|format(run.match_info.family_median_span_mhz) }} MHz.
-  <br><b>Provisional.</b> Ward runs on centroids in the scaled space, which
-  still carries a 14&times; distance-share spread &mdash;
-  <code>x03_channel_offset</code> at 24.3% and <code>f07_kurt_bw_corr</code> at
-  13.1% &mdash; so these families are grouped substantially by channel offset
-  and by a clipped correlation coefficient. Re-derive after the
-  contribution-equalising scaling lands.</p>
+  <br><b>Provisional.</b> The cut is a <b>granularity dial</b>, not a
+  structure detector: cutting at the p-th percentile of the merge heights
+  performs the lowest p% of merges, so it returns about
+  <i>k</i>(1&nbsp;&minus;&nbsp;p/100) families whatever the data looks like.
+  The family <i>count</i> is therefore a choice, not a discovery. An earlier
+  version of this note blamed <code>x03_channel_offset</code>'s 24.3% share
+  instead; measured on k-NN pairs, which is what HDBSCAN responds to, x03 is
+  7.4% against a 6.7% equal share and is well behaved.</p>
 {% endif %}
 
 <form hx-post="/stability" hx-target="#stability" hx-swap="innerHTML"

@@ -12,16 +12,24 @@ lands in -- so cluster ids as they stand are batch artefacts, and matching is a
 correctness fix rather than an enhancement.
 
 Ward linkage on cluster centroids, cut at an explicit distance. Deterministic:
-no perplexity, no seed, no embedding. Measured cost at D=15, scipy nn-chain
-(O(n) memory):
+no perplexity, no seed, no embedding. Measured cost at D=15:
 
-    2,000 centroids (Bench, leaf)      0.04 s
-   20,000 centroids                    6.78 s
-  ~78,000 centroids (full `all`)      ~100 s   (extrapolated O(n^2))
+    2,000 centroids (Bench, leaf)      0.04 s        18 MB
+   20,000 centroids                    6.78 s       1.6 GB
+  ~78,000 centroids (full `all`)      ~100 s        ~24 GB  -- REFUSED
 
-so one exact implementation serves the Bench interactively and the CLI offline.
+MEMORY IS O(k^2), NOT O(k). An earlier version of this docstring claimed
+scipy's nn-chain is O(n) in memory. That is wrong and was asserted without
+being measured -- peak allocation tracks the condensed distance matrix
+exactly (18 MB against 16 MB predicted at k=2,000; 162 MB against 144 MB at
+k=6,000). At the ~78,000 centroids `leaf` produces on all_features.parquet
+the condensed matrix alone is 24.3 GB, so `match()` refuses rather than
+exhausting memory; raise MAX_CENTROIDS deliberately if you have the RAM.
+
 A k-NN-graph approximation was measured at 75.8 s for 80,000 -- slower than
-exact Ward and strictly worse -- and is not used.
+exact Ward at that size and strictly worse in quality -- and is not used, so
+above the guard the honest answer is to cluster a sample or use a coarser
+`min_cluster_size` rather than to approximate.
 
 CAVEAT, and it belongs in any write-up of the first family taxonomy: the cut
 is a granularity dial (see derive_cut_pct), so the number of families is a
@@ -42,6 +50,11 @@ from __future__ import annotations
 import numpy as np
 
 from . import diagnostics
+
+# Above this many clusters, scipy's Ward needs a condensed distance matrix
+# larger than most machines have: k=40,000 is 6.4 GB, k=78,000 is 24.3 GB.
+# Measured, not assumed -- see the module docstring.
+MAX_CENTROIDS = 40_000
 
 
 def centroids(labels, X):
@@ -226,15 +239,26 @@ def match(labels, X, *, cut=None, pct=50, rule="pct", method="ward"):
     ids, C = centroids(labels, X)
 
     fam = np.full(len(labels), -1, dtype=np.int32)
+    # cut_source is set here, not only on the linkage path: the early returns
+    # below used to omit it, and the CLI indexes it unconditionally, so a valid
+    # all-noise or single-cluster run raised KeyError instead of being written.
     info = {"cut": float(cut) if cut is not None else 0.0,
             "n_clusters": int(len(ids)), "n_families": 0,
-            "nn_distances": [], "method": method}
+            "nn_distances": [], "method": method,
+            "cut_source": "explicit" if cut is not None else "none needed"}
     if len(ids) == 0:
         return fam, info
     if len(ids) == 1:
         fam[labels == ids[0]] = 0
         info["n_families"] = 1
         return fam, info
+
+    if len(ids) > MAX_CENTROIDS and method != "tsne":
+        raise MemoryError(
+            f"{len(ids):,} clusters would need a "
+            f"{len(ids) * (len(ids) - 1) // 2 * 8 / 1e9:.1f} GB condensed "
+            f"distance matrix for exact Ward. Cluster a sample, raise "
+            f"min_cluster_size, or raise matching.MAX_CENTROIDS deliberately.")
 
     info["nn_distances"] = _nn_distances(C)
 

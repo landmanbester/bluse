@@ -179,8 +179,7 @@ def load_dataset(name, sample, seed):
     # bluse-cluster. That is because the Bench clusters 35k rows and the CLI
     # clusters 1.28M, and because two runs of one configuration at different
     # seeds already agree at only ARI 0.024.
-    q75f, q25f = np.percentile(X, [75, 25], axis=0)
-    scaler_stats = {"median": np.median(X, axis=0), "iqr": q75f - q25f}
+    scaler_stats = diagnostics.robust_stats(X)
 
     if sample and len(df) > sample:
         idx = np.sort(np.random.default_rng(seed).choice(len(df), sample,
@@ -192,6 +191,25 @@ def load_dataset(name, sample, seed):
                  scaler_stats=scaler_stats)
     DATASETS[key] = ds
     return ds
+
+
+def _stats_for(ds, use):
+    """
+    Full-population robust scaling stats, restricted to the columns in use.
+
+    D-4: the Bench samples 35k rows but must not FIT its scaler on them.
+    load_dataset() computes median and IQR over every row before sampling, and
+    this hands the relevant slice to scale(). An earlier version stored those
+    stats and never read them, so the sample-fit remained in place and the
+    defect was reported fixed when it was not.
+
+    Returns None for anything but "robust" -- the quantile transformer has no
+    cheap two-row-set form, and "none" does not scale.
+    """
+    st = getattr(ds, "scaler_stats", None)
+    if not st:
+        return None
+    return {"median": st["median"][use], "iqr": st["iqr"][use]}
 
 
 def embed(ds, method, cols=None, scaling="robust"):
@@ -208,7 +226,7 @@ def embed(ds, method, cols=None, scaling="robust"):
     if ck in ds.embedding:
         return ds.embedding[ck]
     use = [ds.columns.index(c) for c in cols]
-    Z = scale(ds.raw[:, use], scaling)
+    Z = scale(ds.raw[:, use], scaling, _stats_for(ds, use))
     if method == "umap":
         try:
             import umap
@@ -282,7 +300,7 @@ def run_hdbscan(X, mcs, ms, method="eom"):
 def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed,
             method="eom"):
     use = [ds.columns.index(c) for c in cols]
-    X = scale(ds.raw[:, use], scaling)
+    X = scale(ds.raw[:, use], scaling, _stats_for(ds, use))
     n = len(X)
     labels = np.full(n, -1, dtype=np.int32)
     trace = []
@@ -525,8 +543,8 @@ async def do_cluster(request: Request):
         # which that cancels, measured: eom membership ARI 0.028 -> 0.519.
         families, match_info = None, {}
         if p["match"] == "on":
-            Xs = scale(ds.raw[:, [ds.columns.index(c) for c in cols]],
-                       p["scaling"])
+            _use = [ds.columns.index(c) for c in cols]
+            Xs = scale(ds.raw[:, _use], p["scaling"], _stats_for(ds, _use))
             families, match_info = matching.match(labels, Xs,
                                                   pct=p["match_pct"])
             fq = metrics.quality(families, ds.df)
@@ -590,7 +608,10 @@ async def do_stability(request: Request):
              mcs=int(form.get("mcs", 4)),
              ms=int(form.get("ms", 8)),
              epochs=int(form.get("epochs", 8)),
-             batch=int(form.get("batch", 3000)))
+             batch=int(form.get("batch", 3000)),
+             # Honour the chosen cut. Defaulting to p50 here made the family
+             # ARI describe a different configuration from the one on screen.
+             match_pct=int(form.get("match_pct", 50)))
 
     # Cluster ONCE per seed and derive both statistics from the same run. The
     # first version called cluster() separately for the cluster-level and
@@ -604,7 +625,8 @@ async def do_stability(request: Request):
             labels, X, _, _ = cluster(ds, cols, p["scaling"], p["mode"],
                                       p["mcs"], p["ms"], p["epochs"],
                                       p["batch"], seed, p["csm"])
-            cached[seed] = (labels, matching.match(labels, X)[0])
+            cached[seed] = (labels,
+                            matching.match(labels, X, pct=p["match_pct"])[0])
         return cached[seed]
 
     seeds = tuple(range(n_seeds))
