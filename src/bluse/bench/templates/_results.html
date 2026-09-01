@@ -7,6 +7,12 @@
     <div class="v">{{ '{:,}'.format(run.stats.noise) }}</div></div>
   <div class="stat"><div class="k">noise ≤4 beams</div>
     <div class="v">{{ '{:,}'.format(run.stats.confined) }}</div></div>
+  <div class="stat hi"><div class="k">narrow &lt;1 MHz</div>
+    <div class="v">{{ '%.2f'|format(run.stats.narrow_frac * 100) }}<span class="sub">%</span></div></div>
+  <div class="stat"><div class="k">largest</div>
+    <div class="v">{{ '%.1f'|format(run.stats.largest_pct) }}<span class="sub">%</span></div></div>
+  <div class="stat"><div class="k">median size</div>
+    <div class="v">{{ run.stats.median_size }}</div></div>
   <div class="stat"><div class="k">features</div>
     <div class="v">{{ run.stats.n_features }}</div></div>
   <div class="stat"><div class="k">time</div>
@@ -35,6 +41,40 @@
   </div>
 </div>
 
+{% if run.epochs %}
+<div class="eyebrow">Epochs</div>
+<table class="epochs">
+  <thead><tr><th>epoch</th><th>alive after</th><th>removed</th>
+    <th>% of original</th></tr></thead>
+  <tbody>
+  {% for e in run.epochs %}
+    <tr {% if e.removed == 0 %}class="dead"{% endif %}>
+      <td>{{ e.epoch }}</td>
+      <td>{{ '{:,}'.format(e.alive) }}</td>
+      <td>{{ '{:,}'.format(e.removed) }}</td>
+      <td class="pct">{{ '%.1f'|format(e.pct_of_original) }}%</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="note">GLOBULAR reached 47.6% in epoch 1 and a flat 22&ndash;30% per
+  epoch after, with no plateau at 8. An epoch removing 0 did no work.</p>
+{% endif %}
+
+<p class="note">narrow-cluster share
+  <b>{{ '%.2f'|format(run.stats.narrow_frac * 100) }}%</b> against a
+  size-preserving permutation null of
+  {{ '%.2f'|format(run.stats.narrow_frac_null * 100) }}% &middot;
+  AMI {{ '%.4f'|format(run.stats.ami) }} &middot;
+  enrichment {{ '%.2f'|format(run.stats.enrichment * 100) }}% of clustered hits.
+  <br>AMI and enrichment are <b>weak proxies, not detection metrics</b>:
+  <code>weak_label == 0</code> means <i>spatially confined</i>, not <i>verified
+  clean</i>, and the class balance among labelled rows is 31:1, which
+  compresses AMI's whole usable range into the third decimal. Enrichment sits
+  near its detection floor at <code>min_cluster_size</code> 4 &mdash; only a
+  fully confined cluster clears &mdash; so do not compare it across runs with
+  different <code>min_cluster_size</code>.</p>
+
 {% if summary %}
 <table>
   <thead><tr>
@@ -60,7 +100,8 @@
 </table>
 {% else %}
 <p class="error">Nothing clustered. Every point is noise — try a smaller
-  min_cluster_size, a larger epsilon, or turn more features on.</p>
+  min_cluster_size, a smaller min_samples,
+  <code>cluster_selection_method = leaf</code>, or turn more features on.</p>
 {% endif %}
 
 <template id="history-fragment">
@@ -68,7 +109,7 @@
   <div class="run {% if h.run_id == run.run_id %}current{% endif %}">
     <span class="n">{{ h.stats.n_clusters }}</span>
     <span class="meta">{{ h.params.scaling }} · {{ h.params.mode }} ·
-      mcs {{ h.params.mcs }} · eps {{ h.params.eps }} ·
+      {{ h.params.csm }} · mcs {{ h.params.mcs }} ·
       {{ h.stats.n_features }}f</span>
     <span class="meta">{{ '%.1f'|format(h.stats.clustered_pct) }}%</span>
   </div>
