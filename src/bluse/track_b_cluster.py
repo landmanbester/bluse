@@ -78,6 +78,7 @@ Outputs into --outdir:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -91,7 +92,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from . import features as F
+from . import diagnostics
 from . import matching
+from . import metrics
 from . import paths
 
 
@@ -396,6 +399,15 @@ def main():
                    help="percentile of the merge heights used as the cut when "
                         "--match-cut is not given. Higher = fewer, broader "
                         "families; p50 is where the reproducibility gain peaks")
+    p.add_argument("--seeds", type=int, default=0,
+                   help="if >1, re-run across this many seeds and report "
+                        "membership ARI, composite ARI and noise agreement at "
+                        "cluster and family level. Costs one clustering run "
+                        "per seed over the WHOLE file -- on `all` that is "
+                        "1.28M rows and minutes per seed")
+    p.add_argument("--report", action="store_true",
+                   help="print the per-feature diagnostics table and exit "
+                        "without clustering")
     p.add_argument("--seed", type=int, default=0)
     paths.add_workspace_arg(p)
     args = p.parse_args()
@@ -413,6 +425,30 @@ def main():
     df = df[df.feature_ok].reset_index(drop=True)
     tag = args.file or "all"
     print(f"{tag}: {len(df):,} hits with usable features")
+
+    if args.report:
+        # scaling="none" on purpose: feature_matrix() would otherwise hand
+        # back an ALREADY-SCALED matrix, and audit() scales again. The tell is
+        # an iqr_raw of exactly 1.000 for every column, which is the
+        # post-robust IQR by construction rather than the raw spread.
+        X, columns, good = feature_matrix(df, scaling="none")
+        kinds = {c + "_n": k for c, k in F.column_kinds().items()}
+        rows = diagnostics.audit(X[good], columns, scaling=args.scaling,
+                                 kinds=kinds, min_samples=args.min_samples)
+        eq = 100.0 / max(len(columns), 1)
+        print(f"\n  {int(good.sum()):,} rows, {len(columns)} features, "
+              f"scaling={args.scaling}, equal share {eq:.1f}%\n")
+        print(f"  {'column':30s} {'vals':>7s} {'tie':>6s} {'clip':>6s} "
+              f"{'IQR':>9s} {'share':>7s} {'knn':>7s}  flags")
+        for r in rows:
+            print(f"  {r['label']:30s} {r['n_distinct']:7d} "
+                  f"{r['max_tie_fraction']:6.3f} {r['clip_frac']:6.3f} "
+                  f"{r['iqr_raw']:9.3f} {100*r['share_global']:6.1f}% "
+                  f"{100*r['share_knn']:6.1f}%  {','.join(r['flags'])}")
+        print("\n  share_global carries the flag threshold; knn is reported "
+              "but not thresholded.\n  The two share flags are ONE "
+              "observation -- shares sum to 1.\n")
+        return
 
     if args.mode == "epochs":
         labels, cols, _, trace = cluster_epochs(df, args)
@@ -434,6 +470,27 @@ def main():
               f"({minfo['cut_source']})")
 
     summarise(df, labels, args.outdir, tag)
+    q = metrics.quality(labels, df)
+    q["epochs"] = metrics.epoch_trace(trace, len(labels))
+    if args.seeds and args.seeds > 1:
+        def run_fn(seed):
+            a = argparse.Namespace(**vars(args))
+            a.seed = seed
+            lab, _, _, _ = cluster_epochs(df, a)
+            return lab
+        q["stability"] = metrics.stability(run_fn,
+                                           seeds=tuple(range(args.seeds)))
+        print(f"  stability over {args.seeds} seeds: "
+              f"membership ARI {q['stability']['ari_restricted']:.4f}, "
+              f"composite {q['stability']['ari_composite']:.4f}, "
+              f"noise agreement {q['stability']['noise_agreement']:.4f}")
+    # narrow_frac_at is keyed by float, which json cannot serialise as a key.
+    q["narrow_frac_at"] = {str(k): v for k, v in q["narrow_frac_at"].items()}
+    mpath = os.path.join(args.outdir, f"{tag}_metrics.json")
+    with open(mpath, "w") as fh:
+        json.dump(q, fh, indent=2, default=float)
+    print(f"  wrote {mpath}")
+
     plot(df, labels, cols, args.outdir, tag, args.scaling)
 
 
