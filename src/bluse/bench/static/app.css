@@ -404,3 +404,29 @@ td .swatch {
   #results.htmx-request .spinner-text,
   #results.busy .spinner-text { display: inline; }
 }
+
+/* Diagnostics line under each feature in the rail. The raw-IQR bar answers
+   "how unequal are the columns before scaling"; this line answers "what does
+   each one contribute to the distance", which is where the defects are. */
+.feat .diag {
+  grid-column: 1 / -1;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--dimmer);
+  padding-left: 20px;
+  line-height: 1.5;
+}
+.feat .diag .dim { opacity: 0.6; }
+.feat.flagged { background: rgba(232, 115, 74, 0.06); }
+.feat.flagged .name { color: #e8a04a; }
+
+/* Per-epoch reduction table. A row that removed nothing did no work, and
+   dimming it makes the single-pass collapse visible without reading numbers. */
+table.epochs { width: 100%; border-collapse: collapse; font-family: var(--mono);
+  font-size: 10.5px; margin-bottom: 10px; }
+table.epochs th { text-align: left; color: var(--dimmer); font-weight: 400;
+  padding: 2px 6px; }
+table.epochs td { padding: 2px 6px; }
+table.epochs tr.dead { opacity: 0.4; }
+p.note { font-family: var(--mono); font-size: 10px; color: var(--dimmer);
+  line-height: 1.55; margin: 4px 0 12px; }

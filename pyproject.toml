@@ -37,7 +37,10 @@ bench = [
 # UMAP embeddings in Cluster Bench. Optional because it drags in numba/llvmlite,
 # which is a heavy install for a feature that falls back to PCA if absent.
 umap = ["umap-learn>=0.5.5"]
-all = ["bluse[bench,umap]"]
+# The test suite. tests/unit is synthetic and runs anywhere; tests/workspace
+# needs a features/ directory and is skipped without one.
+dev = ["pytest>=7.4"]
+all = ["bluse[bench,umap,dev]"]
 
 [project.scripts]
 bluse-explore  = "bluse.explore:main"
@@ -53,3 +56,14 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "bluse"
 module-root = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/ is a package, so `from tests.unit import fixtures` needs the repo root
+# importable. Without this the suite collects only when pytest is invoked from
+# the repo root, which is exactly the "runs on one machine" failure the
+# synthetic fixtures exist to avoid.
+pythonpath = ["."]
+markers = [
+    "workspace: needs a BLUSE workspace with features/; skipped without one",
+]

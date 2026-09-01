@@ -1,6 +1,18 @@
 # Cluster Bench review — findings and recommended work
 
 **Status:** external review, 2026-09. Input to a spec, not a spec.
+
+> **Superseded in places.** `bench-review-2026-09-response.md` measured this
+> document's claims on the real feature matrices and corrected several;
+> `bench-review-2026-09-addendum.md` is the reviewer's second pass, which
+> withdraws its §2 (the `f06` redundancy claim), its §1.3 step 3 (pairwise ARI
+> across configurations) and the D-4 framing. Where they conflict with this
+> document, they win. The `[measured]` figures below were simulation-calibrated;
+> treat the response's as authoritative.
+> `docs/superpowers/specs/2026-09-01-cluster-bench-review-design.md` is the
+> design that came out of all three, and
+> `aug_2026_workshop/clusters/acceptance-2026-09.md` records what was measured
+> once it was built.
 **Reviewed:** `src/bluse/bench/`, `src/bluse/track_b_cluster.py`, `src/bluse/features.py`,
 `papers/GLOBULAR-technical-reference.md`, `AGENTS.md`, `aug_2026_workshop/README.md`,
 and the committed `aug_2026_workshop/clusters/*_summary.csv`.
@@ -22,51 +34,21 @@ Every claim below is tagged, following the repo's own "verify before claiming" c
 
 The single most important structural point, which shapes everything else: **the Bench is
 currently a very good instrument with no objective function.** Every knob is exposed and
-well explained, but nothing on screen says whether a configuration is *better*. Section 5
+well explained, but nothing on screen says whether a configuration is *better*. Section 4
 fixes that with data already sitting in the parquet, and it should be built before any of
-the exploratory additions in section 7, because without it those additions produce more
+the exploratory additions in section 6, because without it those additions produce more
 things to look at rather than more things to conclude.
 
 ---
 
-## 1. Corrections to earlier advice — do not implement these
 
-Four suggestions were made to Landman before this repo was read. All four are wrong, and
-they are recorded here so they do not leak into the spec.
-
-1. **"Move the embedding downstream of the clusterer."** Already correct in the code.
-   `cluster()` in `bench/app.py` runs HDBSCAN on the full-dimensional scaled matrix;
-   `embed()` projects the same matrix for display only. The docstring records that an
-   earlier version froze the plot geometry and that this was fixed. No action. **[repo]**
-
-2. **"Add `cluster_selection_epsilon`."** Deliberately removed, for a good reason:
-   sklearn's `epsilon_search` (`_hdbscan/_tree.pyx:606`) compares epsilon against `1/d`,
-   so on this distance scale every value is either a bit-identical no-op or raises
-   `TypeError`. Measured ARI 1.000 across 0.0/0.05/0.18/0.5. Do not re-add it to the
-   sklearn path. Section 4.3 proposes reaching the same capability by another route.
-   **[repo]**
-
-3. **"Add unit-range / min-max scaling to reproduce the paper."** `--scaling none`
-   already *is* the paper's spec: the GLOBULAR log / quantile / unit-range transforms
-   live in `features.normalise()` and are applied upstream, so "none" means "the paper's
-   preprocessing and nothing further". No action. **[repo]**
-
-4. **"Rank anomalies by distance to the nearest non-anomalous point."** GLOBULAR tried
-   this over 6–11 principal components and got no improvement in injected-signal
-   recovery (§11 of the technical reference). `papers/GLOBULAR-technical-reference.md`
-   §12.5 already grades it "Low — they tried it and it did not work". GLOSH is a
-   different construction and is worth one cheap experiment, but it is a P3, not a P1.
-   **[repo]**
-
----
-
-## 2. Finding 1 — the zero-drift tie defeats robust scaling (highest priority)
+## 1. Finding 1 — the zero-drift tie defeats robust scaling (highest priority)
 
 This is the most consequential thing in the review. It is a *feature-space* defect, not a
 UI defect, but the Bench is where it will be diagnosed and where the fix has to be
 steerable.
 
-### 2.1 The chain
+### 1.1 The chain
 
 - 22–47% of hits per file have `driftRate` **exactly** 0.0; on `sband_short` it is 33.5%.
   **[repo]**
@@ -88,7 +70,7 @@ steerable.
 
   **[measured]**
 
-### 2.2 What this means
+### 1.2 What this means
 
 Two separate problems, both bad, and neither is what `robust` was added to fix.
 
@@ -111,7 +93,7 @@ pathology, and it is present in every batch by construction rather than by accid
 returns k=1 on every batch and why every batch reads as "one connected blob". It is not
 offered as the whole explanation.
 
-### 2.3 Test it before acting
+### 1.3 Test it before acting
 
 Cheap, on `sband_short_features.parquet`, no new code paths:
 
@@ -124,7 +106,7 @@ Cheap, on `sband_short_features.parquet`, no new code paths:
    largest-cluster fraction substantially.
 3. Report pairwise ARI across the three. Do not eyeball the scatter.
 
-### 2.4 Fixes, in preference order
+### 1.4 Fixes, in preference order
 
 1. **Treat zero drift as a discrete state, not a small number.** Split `f02` into a
    boolean `f02_is_zero_drift` and a `f02_abs_drift` that is quantile-transformed over
@@ -146,7 +128,7 @@ measurement above says it under-corrects rather than over-corrects.
 
 ---
 
-## 3. Finding 2 — `f06_bimodality` carries no information and adds weight
+## 2. Finding 2 — `f06_bimodality` carries no information and adds weight
 
 `f04 = skew(_norm(spectrum))`, `f05 = kurtosis(_norm(spectrum), fisher=False)`, and
 `f06 = (skew² + 1) / kurtosis` on **the same** `_norm(b.spectrum)`. So
@@ -184,9 +166,9 @@ Worth checking the same way while in there: `f07`/`f08` come from one shared swe
 
 ---
 
-## 4. Finding 3 — the clustering is stabilised on GLOBULAR's *insensitive* branch
+## 3. Finding 3 — the clustering is stabilised on GLOBULAR's *insensitive* branch
 
-### 4.1 What the committed results actually show
+### 3.1 What the committed results actually show
 
 From `aug_2026_workshop/clusters/*_summary.csv`, computed directly: **[repo]**
 
@@ -209,7 +191,7 @@ Compare GLOBULAR Table 1: 47.6% reduction in epoch 1, then a flat 22–30% per e
 plateau at epoch 8, ending at 6.9% of the original. Ours ends at ~0.1%. That is not the
 same regime, and the difference is not a tuning detail.
 
-### 4.2 The branch problem
+### 3.2 The branch problem
 
 `AGENTS.md` gotcha 9 records that with `min_samples ≤ 2` the run is bistable: ten
 identical 3000-point draws returned either k=2 holding 99.7% of points, or ~200
@@ -228,14 +210,14 @@ condensed tree: either the root's two children win (k=2) or EOM descends all the
 the leaves (k≈200). There is nothing in between *by construction*. Raising `min_samples`
 does not remove the knife edge; it just biases which side of it you land on.
 
-### 4.3 Proposal
+### 3.3 Proposal
 
 **Add `cluster_selection_method` as a control, defaulting to `eom`, with `leaf` available.**
 `leaf` takes the leaves of the condensed tree directly. It never makes the root
 comparison, so it is not bistable, and it yields many small homogeneous clusters — which
 is the regime GLOBULAR operated in and the regime that makes the epoch loop meaningful.
 It is a one-word change to `HDBSCAN(...)` in two files. This is the highest
-value-per-line item in the review. **[hypothesis: test with the section 5 metrics]**
+value-per-line item in the review. **[hypothesis: test with the section 4 metrics]**
 
 `leaf` will over-split. GLOBULAR's answer to over-splitting was ε_m — "discover many
 prospective subclusters with a low n_pts and ρ_pts, and then merge them with a
@@ -267,7 +249,7 @@ better.
 
 ---
 
-## 5. Finding 4 — there is no objective function, and one is already in the parquet
+## 4. Finding 4 — there is no objective function, and one is already in the parquet
 
 `_results.html` shows clusters, clustered %, noise, noise ≤4 beams, features, time. Not
 one of those says whether a run is *good*. Tuning is therefore by eye, on a scatter plot
@@ -289,7 +271,7 @@ Add, as headline stats:
   `rfi_pct` already in the table. The interesting statistic is what fraction of clustered
   hits sit in clusters that are >90% one class.
 - **Largest-cluster fraction** and **median cluster size**. Two numbers that would have
-  made section 4.1 visible on the first run.
+  made section 3.1 visible on the first run.
 
 Be honest about what this measures, in the UI copy as well as the code: `weak_label` 0
 means *spatially confined*, not *verified clean*, and the repo is already careful about
@@ -308,7 +290,7 @@ loop immediately.
 
 ---
 
-## 6. Prioritised work items
+## 5. Prioritised work items
 
 Effort estimates are relative, not hours. Each item lists where it lands and how to know
 it worked.
@@ -326,7 +308,7 @@ Add `n_distinct`, `max_tie_fraction`, and post-scaling IQR (under the currently 
 scaling) alongside the existing raw-IQR bar. Flag any column with `max_tie_fraction > 0.1`.
 *Where:* `bench/app.py::pick_dataset`, `templates/_controls.html`.
 *Done when:* `f02_abs_drift` flags at ~0.34 on `sband_short`, and the post-scaling IQR
-column shows the ~0.16 anomaly from section 2.1 (or refutes it).
+column shows the ~0.16 anomaly from section 1.1 (or refutes it).
 
 **P0-3. `cluster_selection_method` control, `eom` default, `leaf` available.**
 *Where:* `run_hdbscan` in both `bench/app.py` and `track_b_cluster.py`; one new select in
@@ -341,7 +323,7 @@ percent of original. `cluster()` already computes `alive` per epoch and records 
 this is bookkeeping, not new logic.
 *Where:* `bench/app.py::cluster` returns an epoch trace; new block in `_results.html`.
 *Done when:* the trace on default settings shows the epoch-1 collapse described in
-section 4.1, or shows that it does not happen.
+section 3.1, or shows that it does not happen.
 
 ### P1 — high value, unblocked by P0
 
@@ -370,7 +352,7 @@ the real cost.
 **P1-3. Pre-filter control.**
 A select: all hits / `driftRate != 0` / Track A survivors (`pass_all`) / exclude
 RFI-masked. Every one of those columns is already in the feature parquet. This makes
-section 2.3's experiment a click, and it connects Tracks A and B in the tool where they
+section 1.3's experiment a click, and it connects Tracks A and B in the tool where they
 are currently connected only in the pipeline.
 *Done when:* the non-zero-drift option changes largest-cluster fraction on `sband_short`,
 and the delta is recorded.
@@ -400,7 +382,7 @@ build the second as default and the first as a reproduction path:
 *Done when:* the results header reads "1,491 raw clusters → N matched families" and the
 matched families survive the P1-2 stamp-grid inspection.
 
-**P2-2. `hdbscan` backend as an optional extra.** Section 4.3. Ships
+**P2-2. `hdbscan` backend as an optional extra.** Section 3.3. Ships
 condensed-tree plots, `cluster_persistence_`, DBCV, `approximate_predict`, and answers
 the ε_m question. Add as `pyproject.toml` optional-dependency `hdbscan`, fold into `all`,
 fall back to sklearn when absent — mirroring how `umap` is handled today.
@@ -434,14 +416,17 @@ histograms catch the ones we do not.
   because the committed `*_space.png` plots look filamentary: if the feature space is
   continuous rather than blobby, that is a finding about whether density clustering is
   the right tool at all, and PHATE will show it where UMAP will manufacture islands.
-- **GLOSH outlier scores** to rank the noise class. Downgraded per section 1, item 4 —
-  GLOBULAR's analogous attempt failed. One experiment, record the result either way.
+- **GLOSH outlier scores** to rank the noise class. Deliberately low priority: GLOBULAR
+  ranked anomalies by distance to the nearest non-anomalous point over 6–11 principal
+  components and got no improvement in injected-signal recovery (§11 of the technical
+  reference, graded "Low — they tried it and it did not work" in §12.5). GLOSH is a
+  different construction, so it is worth one experiment — record the result either way.
 - **DBCV** as an internal validity index, if the `hdbscan` backend lands. Do not add
   silhouette; it assumes convex clusters and will mislead.
 
 ---
 
-## 7. Small defects found while reading
+## 6. Small defects found while reading
 
 **D-1.** `templates/_results.html` renders `{{ h.params.eps }}` in the run-history
 fragment. `eps` was removed from the params dict, so Jinja renders it as empty and the
@@ -476,7 +461,7 @@ invariant this review is about: no `*_n` column has `max_tie_fraction > 0.5`.
 
 ---
 
-## 8. Conventions the implementation must respect
+## 7. Conventions the implementation must respect
 
 Read from `AGENTS.md`; restated here because a spec that violates these will be rejected
 on review rather than on merit.
@@ -503,15 +488,23 @@ on review rather than on merit.
 
 ---
 
-## 9. Explicitly out of scope / do not do
+## 8. Explicitly out of scope / do not do
 
-- Do not re-add `cluster_selection_epsilon` to the sklearn path. Section 1.
+- Do not re-add `cluster_selection_epsilon` to the sklearn path. sklearn's
+  `epsilon_search` (`_hdbscan/_tree.pyx:606`) compares epsilon against `1/d`, so on this
+  distance scale every value is either a bit-identical no-op (measured ARI 1.000 across
+  0.0/0.05/0.18/0.5) or raises `TypeError`. Section 3.3 reaches the same capability by
+  another route.
 - Do not remove the batching loop or "simplify" it into a single pass. It is integral,
   measured at 71 clusters batched vs 2 unbatched on `sband_short`.
 - Do not make the embedding an input to the clusterer. It is display-only and that is
   correct.
+- Do not add a unit-range or min-max scaling mode. `--scaling none` already *is* the
+  paper's spec — the GLOBULAR log / quantile / unit-range transforms live in
+  `features.normalise()` and are applied upstream, so "none" means "the paper's
+  preprocessing and nothing further".
 - Do not add silhouette score. Use AMI against `weak_label` now, DBCV later.
-- Do not remove `f06_bimodality` on the strength of section 3. Diagnose it, weight it,
+- Do not remove `f06_bimodality` on the strength of section 2. Diagnose it, weight it,
   document it.
 - Do not change the three unresolved Track A judgement calls (ITU masks, the DTV comb,
   `--tol-steps`) as a side effect of anything here.
@@ -520,11 +513,11 @@ on review rather than on merit.
 
 ---
 
-## 10. If only three things get built
+## 9. If only three things get built
 
 1. **P0-1** (AMI + largest-cluster fraction + median cluster size). Without an objective
    function every other change is a matter of taste.
 2. **P0-3** (`cluster_selection_method=leaf`). One word, and it is the most plausible
    route from the insensitive branch to the regime GLOBULAR actually operated in.
-3. **Section 2.3's experiment** (zero-drift tie). Three clustering runs and a table. If it
+3. **Section 1.3's experiment** (zero-drift tie). Three clustering runs and a table. If it
    confirms, the feature-space fix in 2.4 matters more than anything in the UI.

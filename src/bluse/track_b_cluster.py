@@ -78,6 +78,7 @@ Outputs into --outdir:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -91,6 +92,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from . import features as F
+from . import diagnostics
+from . import matching
+from . import metrics
 from . import paths
 
 
@@ -167,7 +171,8 @@ def run_hdbscan(X, args):
     # metric="precomputed", and ours is euclidean.
     est = HDBSCAN(min_cluster_size=args.min_cluster_size,
                   min_samples=args.min_samples,
-                  cluster_selection_method="eom",
+                  cluster_selection_method=getattr(
+                      args, "cluster_selection_method", "eom"),
                   copy=True,
                   n_jobs=-1)
     try:
@@ -203,6 +208,7 @@ def cluster_epochs(df, args):
     rng = np.random.default_rng(args.seed)
     labels = np.full(len(df), -2, dtype=np.int32)
     epoch_of = np.full(len(df), -1, dtype=np.int32)
+    trace = []
     next_id = 0
     print(f"  epoch 0: {len(alive):,} hits, {len(cols)} features")
 
@@ -227,13 +233,14 @@ def cluster_epochs(df, args):
                 epoch_of[b[clustered]] = ep
             survivors.append(b[~clustered])
         alive = np.concatenate(survivors) if survivors else np.array([], int)
+        trace.append(int(len(alive)))
         pct = 100 * len(alive) / max(1, int(good.sum()))
         print(f"  epoch {ep}: {len(alive):,} remaining ({pct:.1f}%)")
         if len(alive) < args.min_cluster_size * 2:
             break
     labels[alive] = -1                                  # never clustered
     epoch_of[alive] = args.epochs + 1
-    return labels, cols, epoch_of
+    return labels, cols, epoch_of, trace
 
 
 def summarise(df, labels, outdir, tag):
@@ -337,6 +344,20 @@ def plot(df, labels, cols, outdir, tag, scaling="robust"):
     print(f"  wrote {p}")
 
 
+def _json_safe(obj):
+    """Recursively replace non-finite floats with None, for strict JSON."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (float, np.floating)):
+        f = float(obj)
+        return f if np.isfinite(f) else None
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    return obj
+
+
 def main():
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -369,6 +390,39 @@ def main():
                    help="how to equalise feature contribution before the "
                         "Euclidean distance. 'none' is GLOBULAR's literal spec "
                         "and clusters poorly here -- see feature_matrix()")
+    p.add_argument("--cluster-selection-method", choices=["eom", "leaf"],
+                   default="eom",
+                   help="EOM (default) or leaf extraction from the condensed "
+                        "tree. A genuine choice, not a default awaiting "
+                        "tuning: measured on sband_short, leaf wins coherence "
+                        "8.8x (narrow-cluster share 6.82%% against 0.78%%) "
+                        "while eom plus --match wins reproducibility 4.8x "
+                        "(family ARI 0.519 against 0.108). Pick leaf to build "
+                        "a taxonomy, eom to rank candidates")
+    p.add_argument("--match", action="store_true",
+                   help="group clusters into families by Ward linkage on "
+                        "centroids. Cluster ids are batch artefacts -- one "
+                        "population is minted afresh per batch and epoch -- so "
+                        "families are the level at which that cancels. "
+                        "Measured on sband_short/eom, membership ARI across "
+                        "seeds goes 0.028 -> 0.519")
+    p.add_argument("--match-cut", type=float, default=None,
+                   help="explicit linkage distance cut. Default: derived from "
+                        "the Ward merge-height distribution")
+    p.add_argument("--match-pct", type=int, default=50,
+                   help="percentile of the merge heights used as the cut when "
+                        "--match-cut is not given. Higher = fewer, broader "
+                        "families; p50 is where the reproducibility gain peaks")
+    p.add_argument("--seeds", type=int, default=0,
+                   help="if >1, re-run across this many seeds and report "
+                        "membership ARI, composite ARI and noise agreement. "
+                        "Adds family-level stability when --match is also "
+                        "given. Costs one clustering run per seed over the "
+                        "WHOLE file -- on `all` that is 1.28M rows and minutes "
+                        "per seed")
+    p.add_argument("--report", action="store_true",
+                   help="print the per-feature diagnostics table and exit "
+                        "without clustering")
     p.add_argument("--seed", type=int, default=0)
     paths.add_workspace_arg(p)
     args = p.parse_args()
@@ -387,12 +441,99 @@ def main():
     tag = args.file or "all"
     print(f"{tag}: {len(df):,} hits with usable features")
 
+    if args.report:
+        # scaling="none" on purpose: feature_matrix() would otherwise hand
+        # back an ALREADY-SCALED matrix, and audit() scales again. The tell is
+        # an iqr_raw of exactly 1.000 for every column, which is the
+        # post-robust IQR by construction rather than the raw spread.
+        X, columns, good = feature_matrix(df, scaling="none")
+        kinds = {c + "_n": k for c, k in F.column_kinds().items()}
+        rows = diagnostics.audit(X[good], columns, scaling=args.scaling,
+                                 kinds=kinds, min_samples=args.min_samples)
+        eq = 100.0 / max(len(columns), 1)
+        print(f"\n  {int(good.sum()):,} rows, {len(columns)} features, "
+              f"scaling={args.scaling}, equal share {eq:.1f}%\n")
+        print(f"  {'column':30s} {'vals':>7s} {'tie':>6s} {'clip':>6s} "
+              f"{'IQR':>9s} {'share':>7s} {'knn':>7s}  flags")
+        for r in rows:
+            print(f"  {r['label']:30s} {r['n_distinct']:7d} "
+                  f"{r['max_tie_fraction']:6.3f} {r['clip_frac']:6.3f} "
+                  f"{r['iqr_raw']:9.3f} {100*r['share_global']:6.1f}% "
+                  f"{100*r['share_knn']:6.1f}%  {','.join(r['flags'])}")
+        print("\n  share_global carries the flag threshold; knn is reported "
+              "but not thresholded.\n  The two share flags are ONE "
+              "observation -- shares sum to 1.\n")
+        return
+
     if args.mode == "epochs":
-        labels, cols, _ = cluster_epochs(df, args)
+        labels, cols, _, trace = cluster_epochs(df, args)
     else:
         labels, cols = cluster_single(df, args)
+        trace = [int((labels < 0).sum())]
+
+    if args.match:
+        # main() does not hold the scaled matrix -- feature_matrix is called
+        # inside the clustering functions -- so recompute it on the columns
+        # actually used. summarise() writes df to <tag>_clusters.parquet, so
+        # the family column travels with the per-hit output for free.
+        X, _, _ = feature_matrix(df, columns=cols, scaling=args.scaling)
+        fam, minfo = matching.match(labels, X, cut=args.match_cut,
+                                    pct=args.match_pct)
+        df["family"] = fam
+        print(f"  matched {minfo['n_clusters']:,} clusters -> "
+              f"{minfo['n_families']:,} families at cut {minfo['cut']:.3f} "
+              f"({minfo['cut_source']})")
 
     summarise(df, labels, args.outdir, tag)
+    q = metrics.quality(labels, df)
+    q["epochs"] = metrics.epoch_trace(trace, len(labels))
+    if args.seeds and args.seeds > 1:
+        # Dispatch through the SAME mode as the primary run. Hardcoding
+        # cluster_epochs meant `--mode single --seeds N` measured the stability
+        # of an algorithm the user had not selected, and ignored --sample.
+        seed_cache = {}
+
+        def _run(seed):
+            if seed not in seed_cache:
+                a = argparse.Namespace(**vars(args))
+                a.seed = seed
+                if args.mode == "epochs":
+                    lab, cs, _, _ = cluster_epochs(df, a)
+                else:
+                    lab, cs = cluster_single(df, a)
+                fam = None
+                if args.match:
+                    Xs, _, _ = feature_matrix(df, columns=cs,
+                                              scaling=args.scaling)
+                    fam = matching.match(lab, Xs, cut=args.match_cut,
+                                         pct=args.match_pct)[0]
+                seed_cache[seed] = (lab, fam)
+            return seed_cache[seed]
+
+        seeds = tuple(range(args.seeds))
+        q["stability"] = metrics.stability(lambda sd: _run(sd)[0], seeds=seeds)
+        print(f"  stability over {args.seeds} seeds: "
+              f"membership ARI {q['stability']['ari_restricted']:.4f}, "
+              f"composite {q['stability']['ari_composite']:.4f}, "
+              f"noise agreement {q['stability']['noise_agreement']:.4f}")
+        if args.match:
+            q["stability_families"] = metrics.stability(
+                lambda sd: _run(sd)[1], seeds=seeds)
+            q["stability_families"]["null"] = metrics.coarsening_null(
+                [_run(sd)[0] for sd in seeds], [_run(sd)[1] for sd in seeds])
+            sf = q["stability_families"]
+            print(f"  family stability: membership ARI "
+                  f"{sf['ari_restricted']:.4f} against a coarsening null of "
+                  f"{sf['null']:.4f}")
+    mpath = os.path.join(args.outdir, f"{tag}_metrics.json")
+    with open(mpath, "w") as fh:
+        # quality() legitimately returns nan (no labels) and inf (a non-zero
+        # narrow share over a zero null). Python writes those as bare
+        # NaN/Infinity, which is not valid JSON and which strict parsers
+        # reject, so map them to null and refuse to emit them.
+        json.dump(_json_safe(q), fh, indent=2, allow_nan=False)
+    print(f"  wrote {mpath}")
+
     plot(df, labels, cols, args.outdir, tag, args.scaling)
 
 

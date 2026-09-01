@@ -7,16 +7,31 @@
 
   <div class="eyebrow">Feature weights</div>
   <p style="font-family:var(--mono);font-size:10px;color:var(--dimmer);margin:0 0 8px">
-    bars show each feature&#39;s raw spread (IQR), before scaling.
-    <b>robust</b> divides these out so every feature counts equally;
-    <b>none</b> leaves them as-is, so the widest bar dominates the metric.
+    bar = raw spread (IQR) before scaling; <b>robust</b> divides these out.
+    <b>share</b> = what the column actually contributes to the distance
+    HDBSCAN takes, against an equal share of
+    {{ '%.1f'|format(features[0].equal_pct if features else 0) }}%.
+    <b>tie</b> = largest repeated value, <b>clip</b> = fraction landing on
+    &plusmn;5.<br>
+    <span style="opacity:.75"><b>Flags use the GLOBAL share. Where knn differs
+    sharply from it, prefer knn</b> &mdash; HDBSCAN responds to local density,
+    not to global spread. Measured: <code>x03_channel_offset</code> is 24.3%
+    global against 7.4% local, so its <code>share-high</code> flag overstates
+    the problem; <code>f09_temporal_skew</code> is 6.7% global against 15.5%
+    local and carries no flag at all. knn is deliberately unthresholded until
+    it is calibrated.<br>The two share flags are ONE observation, not two:
+    shares sum to 1, so a column at 24% mechanically depresses every other
+    toward the lower bound.</span>
   </p>
   {% for f in features %}
-  <label class="feat {% if f.iqr_rel > 0.75 %}dominant{% endif %}">
+  <label class="feat {% if f.flags %}flagged{% endif %}">
     <input type="checkbox" name="feat" value="{{ f.col }}" {% if f.on %}checked{% endif %}>
     <span class="name">{{ f.label }}</span>
     <span class="iqr">{{ '%.3f'|format(f.iqr_raw) }}{% if f.saturated %} <span class="flag">SAT {{ f.saturated|round|int }}%</span>{% endif %}</span>
     <span class="bar"><i style="width: {{ (f.iqr_rel * 100)|round(1) }}%"></i></span>
+    <span class="diag">share {{ '%.1f'|format(f.share_pct) }}%<span
+      class="dim"> / knn {{ '%.1f'|format(f.share_knn_pct) }}%</span>
+      · {{ f.n_distinct }} vals{% if f.max_tie_fraction > 0.01 %} · tie {{ '%.0f'|format(f.tie_pct) }}%{% endif %}{% if f.clip_frac > 0.0001 %} · clip {{ '%.1f'|format(f.clip_pct) }}%{% endif %}{% for fl in f.flags %} <span class="flag">{{ fl }}</span>{% endfor %}</span>
   </label>
   {% endfor %}
   <div class="feat-actions">
@@ -30,6 +45,14 @@
       <option value="robust" selected>robust — median / IQR</option>
       <option value="quantile">quantile — rank uniform</option>
       <option value="none">none — GLOBULAR literal</option>
+    </select>
+  </label>
+  <label class="field"><span>colour by</span>
+    <select id="colour-by" onchange="loadValues()">
+      <option value="" selected>cluster</option>
+      {% for f in features %}
+      <option value="{{ f.col }}">{{ f.label }}</option>
+      {% endfor %}
     </select>
   </label>
   <label class="field"><span>embedding</span>
@@ -46,6 +69,21 @@
       <option value="single">single — one pass</option>
     </select>
   </label>
+  <!-- Not a default awaiting tuning. The two win on DIFFERENT axes, measured
+       on sband_short over 3 seeds, so the tool asks instead of deciding. -->
+  <label class="field"><span>cluster_selection_method</span>
+    <select name="csm">
+      <option value="eom" selected>eom — few clusters, reproducible</option>
+      <option value="leaf">leaf — many clusters, coherent</option>
+    </select>
+  </label>
+  <p style="font-family:var(--mono);font-size:10px;color:var(--dimmer);margin:-4px 0 8px">
+    <b>eom</b> 72 clusters · 0.78% narrow · family ARI 0.52<br>
+    <b>leaf</b> 2162 clusters · 6.82% narrow · family ARI 0.11<br>
+    <span style="opacity:.8">leaf groups more coherently in frequency; eom
+    reproduces better across seeds once families are matched. Pick leaf to
+    build a taxonomy, eom to rank candidates.</span>
+  </p>
   <div class="row2">
     <label class="field"><span>min_cluster_size</span>
       <input type="number" name="mcs" value="4" min="2"></label>
@@ -67,6 +105,24 @@
       <input type="number" name="seed" value="0"></label>
     <div class="field"></div>
   </div>
+
+  <div class="eyebrow">Families</div>
+  <div class="row2">
+    <label class="field"><span>match</span>
+      <select name="match">
+        <option value="off" selected>off</option>
+        <option value="on">on — Ward on centroids</option>
+      </select></label>
+    <label class="field"><span>cut percentile</span>
+      <input type="number" name="match_pct" value="50" min="1" max="99"></label>
+  </div>
+  <p style="font-family:var(--mono);font-size:10px;color:var(--dimmer);margin:-4px 0 8px">
+    groups clusters the batching loop minted separately. Higher percentile =
+    fewer, broader families. Measured on <b>eom</b>/sband_short: p25 gives
+    7.7&times; better reproducibility at unchanged coherence, p50 gives
+    18.6&times; for a small coherence cost, p90 starts fusing distinct
+    populations.
+  </p>
 
   <button type="submit">Cluster</button>
 </form>

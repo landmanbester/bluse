@@ -47,6 +47,12 @@ from sklearn.decomposition import PCA
 
 from .. import features as F
 from .. import paths
+# scale() lives in diagnostics so the Bench and the CLI cannot drift
+# apart on the one thing that matters most to the metric.
+from .. import diagnostics
+from .. import matching
+from .. import metrics
+from ..diagnostics import scale
 
 # Static assets and templates ship inside the wheel, so they -- and only they --
 # are still located relative to this file. Everything the user supplies (feature
@@ -104,6 +110,7 @@ class Dataset:
     raw: np.ndarray                  # (n, n_feat) normalised, pre-scaling
     columns: list[str]
     embedding: dict = field(default_factory=dict)   # method -> (n,2) float32
+    scaler_stats: dict = field(default_factory=dict)  # full-population med/IQR
 
 
 @dataclass
@@ -114,6 +121,9 @@ class Run:
     stats: dict
     params: dict
     rank: dict = field(default_factory=dict)   # cluster label -> size rank
+    epochs: list = field(default_factory=list)   # rendered epoch trace
+    families: np.ndarray = None
+    match_info: dict = field(default_factory=dict)
 
 
 DATASETS: dict[str, Dataset] = {}
@@ -158,37 +168,48 @@ def load_dataset(name, sample, seed):
     good = np.isfinite(X).all(axis=1)
     df, X = df[good].reset_index(drop=True), X[good]
 
+    # D-4: fit the scaling statistics on the FULL population, then sample.
+    # GLOBULAR's requirement that scaling be global and pre-batching is already
+    # satisfied upstream -- features.normalise() fits its transforms globally at
+    # extraction time -- so this is the second stage only.
+    #
+    # Be honest about what this fixes. Measured, a 35k-row IQR matches the
+    # 1,281,878-row population to better than 1.1% on 14 of 15 columns, worst
+    # 6.4%. It is NOT why a Bench configuration fails to reproduce in
+    # bluse-cluster. That is because the Bench clusters 35k rows and the CLI
+    # clusters 1.28M, and because two runs of one configuration at different
+    # seeds already agree at only ARI 0.024.
+    scaler_stats = diagnostics.robust_stats(X)
+
     if sample and len(df) > sample:
         idx = np.sort(np.random.default_rng(seed).choice(len(df), sample,
                                                          replace=False))
         df, X = df.iloc[idx].reset_index(drop=True), X[idx]
 
     keep = [c for c in PROV if c in df.columns]
-    ds = Dataset(key=key, name=name, df=df[keep].copy(), raw=X, columns=cols)
+    ds = Dataset(key=key, name=name, df=df[keep].copy(), raw=X, columns=cols,
+                 scaler_stats=scaler_stats)
     DATASETS[key] = ds
     return ds
 
 
-def scale(X, how):
+def _stats_for(ds, use):
     """
-    Equalise how much each feature contributes to the Euclidean distance.
+    Full-population robust scaling stats, restricted to the columns in use.
 
-    This is the control that matters most. See feature_matrix() in
-    track_b_cluster.py for the measurements behind that claim.
+    D-4: the Bench samples 35k rows but must not FIT its scaler on them.
+    load_dataset() computes median and IQR over every row before sampling, and
+    this hands the relevant slice to scale(). An earlier version stored those
+    stats and never read them, so the sample-fit remained in place and the
+    defect was reported fixed when it was not.
+
+    Returns None for anything but "robust" -- the quantile transformer has no
+    cheap two-row-set form, and "none" does not scale.
     """
-    X = np.array(X, copy=True)
-    if how == "robust":
-        med = np.median(X, axis=0)
-        q75, q25 = np.percentile(X, [75, 25], axis=0)
-        iqr = np.where((q75 - q25) > 1e-12, q75 - q25, 1.0)
-        return np.clip((X - med) / iqr, -5, 5)
-    if how == "quantile":
-        from sklearn.preprocessing import QuantileTransformer
-        qt = QuantileTransformer(output_distribution="uniform",
-                                 n_quantiles=min(1000, len(X)),
-                                 subsample=200_000, random_state=0)
-        return qt.fit_transform(X)
-    return X                                  # "none" = GLOBULAR's literal spec
+    st = getattr(ds, "scaler_stats", None)
+    if not st:
+        return None
+    return {"median": st["median"][use], "iqr": st["iqr"][use]}
 
 
 def embed(ds, method, cols=None, scaling="robust"):
@@ -205,7 +226,7 @@ def embed(ds, method, cols=None, scaling="robust"):
     if ck in ds.embedding:
         return ds.embedding[ck]
     use = [ds.columns.index(c) for c in cols]
-    Z = scale(ds.raw[:, use], scaling)
+    Z = scale(ds.raw[:, use], scaling, _stats_for(ds, use))
     if method == "umap":
         try:
             import umap
@@ -222,7 +243,7 @@ def embed(ds, method, cols=None, scaling="robust"):
     return ds.embedding[ck]
 
 
-def run_hdbscan(X, mcs, ms):
+def run_hdbscan(X, mcs, ms, method="eom"):
     """
     One HDBSCAN pass.
 
@@ -239,6 +260,26 @@ def run_hdbscan(X, mcs, ms):
     that both works and does not crash -- so the knob is gone rather than
     re-ranged. Measured: eps 0.0/0.05/0.18/0.5 give ARI 1.000 against each
     other; 5.0 raises on 14/14 batches.
+
+    `method` selects EOM or leaf extraction, and it is a genuine USER CHOICE
+    rather than a default waiting to be tuned, because the two win on different
+    axes. With allow_single_cluster=False, EOM makes one stability comparison at
+    the root of the condensed tree: either the root's two children win (k=2) or
+    it descends to the leaves (k~200), with nothing in between BY CONSTRUCTION.
+    Raising min_samples biases which side of that knife edge you land on but
+    does not remove it. leaf takes the condensed tree's leaves directly, never
+    makes the root comparison, and is not bistable.
+
+    Measured on sband_short, 3 seeds -- narrow-cluster share, and membership
+    ARI after matching at the p50 cut:
+
+                    clusters  narrow %   family ARI
+        eom               72     0.776        0.519
+        leaf           2,162     6.820        0.108
+
+    leaf wins coherence 8.8x; eom-plus-matching wins reproducibility 4.8x.
+    Which you want depends on whether you are building a taxonomy or ranking
+    candidates, so the tool asks rather than deciding.
     """
     # Built OUTSIDE the try: an unsupported keyword raises TypeError at
     # construction, and the except below would otherwise swallow it and hand
@@ -247,7 +288,7 @@ def run_hdbscan(X, mcs, ms):
     # FutureWarning; it is inert for us because it only applies when
     # metric="precomputed", and ours is euclidean.
     est = HDBSCAN(min_cluster_size=mcs, min_samples=ms,
-                  cluster_selection_method="eom",
+                  cluster_selection_method=method,
                   copy=True,
                   n_jobs=-1)
     try:
@@ -256,11 +297,13 @@ def run_hdbscan(X, mcs, ms):
         return np.full(len(X), -1, dtype=np.int32)
 
 
-def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
+def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed,
+            method="eom"):
     use = [ds.columns.index(c) for c in cols]
-    X = scale(ds.raw[:, use], scaling)
+    X = scale(ds.raw[:, use], scaling, _stats_for(ds, use))
     n = len(X)
     labels = np.full(n, -1, dtype=np.int32)
+    trace = []
 
     # origin[cluster_id] = (epoch, batch) it was discovered in. Cluster ids are
     # a discovery-order serial, NOT a batch number -- one batch usually mints
@@ -268,9 +311,10 @@ def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
     origin = {}
 
     if mode == "single":
-        labels = run_hdbscan(X, mcs, ms).astype(np.int32)
+        labels = run_hdbscan(X, mcs, ms, method).astype(np.int32)
         for c in np.unique(labels[labels >= 0]):
             origin[int(c)] = (1, 0)
+        trace = [int((labels < 0).sum())]
     else:
         alive = np.arange(n)
         rng = np.random.default_rng(seed)
@@ -283,7 +327,7 @@ def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
                 if len(b) < mcs * 2:
                     survivors.append(b)
                     continue
-                lab = run_hdbscan(X[b], mcs, ms)
+                lab = run_hdbscan(X[b], mcs, ms, method)
                 hit = lab >= 0
                 if hit.any():
                     # HDBSCAN mints local ids 0..k-1 in EVERY batch. The old
@@ -300,10 +344,17 @@ def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed):
                     next_id += int(lab[hit].max()) + 1
                 survivors.append(b[~hit])
             alive = np.concatenate(survivors) if survivors else np.array([], int)
+            trace.append(int(len(alive)))
             if len(alive) < mcs * 2:
                 break
         labels[alive] = -1
-    return labels, X, origin
+    return labels, X, origin, trace
+
+
+def summarise_basic(labels):
+    """Cluster ids and sizes only. Used where no provenance frame is at hand."""
+    ids, counts = np.unique(labels[labels >= 0], return_counts=True)
+    return pd.DataFrame({"cluster": ids.astype(int), "n": counts.astype(int)})
 
 
 def summarise(df, labels, origin=None):
@@ -362,22 +413,31 @@ def pick_dataset(request: Request, file: str = Form(...),
     # IQR is exactly 1.000 and the bars would all be equal. What the bars
     # actually show is how unequal the columns are BEFORE scaling, i.e. what
     # the scaling control is there to fix.
-    q75r, q25r = np.percentile(ds.raw, [75, 25], axis=0)
-    iqr_raw = q75r - q25r
+    # The raw IQR bar stays -- it answers "how unequal are the columns before
+    # scaling", which is what the scaling control exists to fix. It cannot
+    # answer what each column CONTRIBUTES to the distance HDBSCAN takes, and
+    # that is where the defects are, so the audit supplies the rest.
+    kinds = {c + "_n": k for c, k in F.column_kinds().items()}
+    rows = diagnostics.audit(ds.raw, ds.columns, scaling="robust",
+                             kinds=kinds, min_samples=8)
 
     sat = {}
     if "f08_turning_bw_saturated" in ds.df.columns:
         sat["f08_turning_bw_hz_n"] = float(ds.df.f08_turning_bw_saturated.mean() * 100)
 
+    iqr_max = max((r["iqr_raw"] for r in rows), default=1.0) or 1.0
     feats = []
-    for i, c in enumerate(ds.columns):
+    for r in rows:
         feats.append({
-            "col": c,
-            "label": c[:-2],
-            "iqr_raw": float(iqr_raw[i]),
-            "iqr_rel": float(iqr_raw[i] / max(iqr_raw.max(), 1e-12)),
-            "saturated": sat.get(c),
-            "on": not c.startswith("f08_"),
+            **r,
+            "iqr_rel": float(r["iqr_raw"] / iqr_max),
+            "saturated": sat.get(r["col"]),
+            "on": not r["col"].startswith("f08_"),
+            "share_pct": 100.0 * r["share_global"],
+            "share_knn_pct": 100.0 * r["share_knn"],
+            "equal_pct": 100.0 * r["equal_share"],
+            "tie_pct": 100.0 * r["max_tie_fraction"],
+            "clip_pct": 100.0 * r["clip_frac"],
         })
     return templates.TemplateResponse(request, "_controls.html", {
         "ds": ds, "features": feats,
@@ -438,6 +498,13 @@ async def do_cluster(request: Request):
 
     p = dict(scaling=form.get("scaling", "robust"),
              mode=form.get("mode", "epochs"),
+             # eom or leaf. A USER CHOICE, not a default awaiting tuning:
+             # measured on sband_short, leaf wins coherence 8.8x (narrow share
+             # 6.820% against 0.776%) while eom-plus-matching wins
+             # reproducibility 4.8x (family ARI 0.519 against 0.108).
+             csm=form.get("csm", "eom"),
+             match=form.get("match", "off"),
+             match_pct=int(form.get("match_pct", 50)),
              mcs=int(form.get("mcs", 4)),
              # min_samples defaults to 8, not 2. sklearn counts the point
              # itself, so ms=1 and ms=2 are the same call: no core-distance
@@ -456,22 +523,37 @@ async def do_cluster(request: Request):
     cached = sig in RUNS
     if not cached:
         t0 = time.time()
-        labels, _, origin = cluster(ds, cols, p["scaling"], p["mode"], p["mcs"],
-                                    p["ms"], p["epochs"], p["batch"], p["seed"])
+        labels, _, origin, trace = cluster(ds, cols, p["scaling"], p["mode"],
+                                           p["mcs"], p["ms"], p["epochs"],
+                                           p["batch"], p["seed"], p["csm"])
         elapsed = time.time() - t0
         summary = summarise(ds.df, labels, origin)
         noise = labels == -1
         conf = noise & (ds.df.n_beams.to_numpy() <= 4)
         rank = {int(c): i for i, c in enumerate(summary["cluster"])}
-        RUNS[sig] = Run(sig, labels, summary, {
-            "n": len(labels),
-            "n_clusters": int(len(summary)),
-            "clustered_pct": float((labels >= 0).mean() * 100),
+        stats = dict(metrics.quality(labels, ds.df))
+        stats.update({
             "noise": int(noise.sum()),
             "confined": int(conf.sum()),
             "seconds": elapsed,
             "n_features": len(cols),
-        }, p, rank)
+        })
+        # Cluster ids are batch artefacts -- one physical population is minted
+        # afresh in every batch and every epoch. Families are the level at
+        # which that cancels, measured: eom membership ARI 0.028 -> 0.519.
+        families, match_info = None, {}
+        if p["match"] == "on":
+            _use = [ds.columns.index(c) for c in cols]
+            Xs = scale(ds.raw[:, _use], p["scaling"], _stats_for(ds, _use))
+            families, match_info = matching.match(labels, Xs,
+                                                  pct=p["match_pct"])
+            fq = metrics.quality(families, ds.df)
+            match_info["family_narrow_frac"] = fq["narrow_frac"]
+            match_info["family_median_span_mhz"] = fq["median_span_mhz"]
+
+        RUNS[sig] = Run(sig, labels, summary, stats, p, rank,
+                        metrics.epoch_trace(trace, len(labels)),
+                        families, match_info)
         if sig in HISTORY:
             HISTORY.remove(sig)
         HISTORY.insert(0, sig)
@@ -496,12 +578,99 @@ async def do_cluster(request: Request):
     return resp
 
 
+@app.post("/stability", response_class=HTMLResponse)
+async def do_stability(request: Request):
+    """
+    Re-run one configuration across N seeds and report how much of it survives.
+
+    Deliberately behind a button rather than on every cluster: it is N times
+    the cost and it is the slowest thing in the tool.
+
+    Its seeds are kept OUT of HISTORY. The run cache key includes the seed and
+    HISTORY is capped at 12, so one N=5 sweep would otherwise insert five
+    near-identical entries and evict most of the comparison history the user
+    was building.
+    """
+    form = await request.form()
+    key = form["key"]
+    ds = DATASETS.get(key)
+    if ds is None:
+        return HTMLResponse('<p class="error">Dataset expired. Load it again.</p>')
+
+    cols = [c for c in form.getlist("feat") if c in ds.columns]
+    if len(cols) < 2:
+        return HTMLResponse('<p class="error">Keep at least two features on.</p>')
+
+    n_seeds = max(2, min(int(form.get("n_seeds", 5)), 10))
+    p = dict(scaling=form.get("scaling", "robust"),
+             mode=form.get("mode", "epochs"),
+             csm=form.get("csm", "eom"),
+             mcs=int(form.get("mcs", 4)),
+             ms=int(form.get("ms", 8)),
+             epochs=int(form.get("epochs", 8)),
+             batch=int(form.get("batch", 3000)),
+             # Honour the chosen cut. Defaulting to p50 here made the family
+             # ARI describe a different configuration from the one on screen.
+             match_pct=int(form.get("match_pct", 50)))
+
+    # Cluster ONCE per seed and derive both statistics from the same run. The
+    # first version called cluster() separately for the cluster-level and
+    # family-level sweeps, i.e. 2N runs where N does, on the slowest route in
+    # the tool.
+    t0 = time.time()
+    cached = {}
+
+    def _run(seed):
+        if seed not in cached:
+            labels, X, _, _ = cluster(ds, cols, p["scaling"], p["mode"],
+                                      p["mcs"], p["ms"], p["epochs"],
+                                      p["batch"], seed, p["csm"])
+            cached[seed] = (labels,
+                            matching.match(labels, X, pct=p["match_pct"])[0])
+        return cached[seed]
+
+    seeds = tuple(range(n_seeds))
+    s_cl = metrics.stability(lambda sd: _run(sd)[0], seeds=seeds)
+    # The same question one level up. Cluster ids are batch artefacts, so the
+    # interesting number is whether FAMILIES reproduce where clusters do not.
+    s_fam = metrics.stability(lambda sd: _run(sd)[1], seeds=seeds)
+    # Coarsening alone does not inflate ARI -- verified, two independent random
+    # partitions coarsened the same way score -0.00003 -- but the headline
+    # metric should not be the only one without a control.
+    s_fam["null"] = metrics.coarsening_null(
+        [cached[sd][0] for sd in seeds], [cached[sd][1] for sd in seeds])
+    elapsed = time.time() - t0
+    return templates.TemplateResponse(request, "_stability.html", {
+        "s": s_cl, "f": s_fam, "params": p, "seconds": elapsed,
+    })
+
+
 @app.get("/labels.bin")
 def labels_bin(run: str):
     r = RUNS.get(run)
     if r is None:
         return Response(status_code=404)
     return Response(r.labels.astype(np.int32).tobytes(),
+                    media_type="application/octet-stream")
+
+
+@app.get("/values.bin")
+def values_bin(key: str, col: str):
+    """
+    One feature column, normalised to [0,1], for colour-by-value.
+
+    This is what makes the rail's distance shares visible rather than tabular:
+    colouring by f02_abs_drift_n renders the zero-drift slab immediately, and
+    if colouring by f01_frequency_n reproduces the cluster structure, that is a
+    one-click finding.
+    """
+    ds = DATASETS.get(key)
+    if ds is None or col not in ds.columns:
+        return Response(status_code=404)
+    v = ds.raw[:, ds.columns.index(col)].astype(np.float32)
+    lo, hi = float(np.nanmin(v)), float(np.nanmax(v))
+    span = hi - lo if hi - lo > 1e-12 else 1.0
+    return Response(((v - lo) / span).astype(np.float32).tobytes(),
                     media_type="application/octet-stream")
 
 

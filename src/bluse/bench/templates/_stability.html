@@ -1,0 +1,35 @@
+<div class="eyebrow">Stability across {{ s.n_seeds }} seeds</div>
+<div class="stats">
+  <div class="stat hi"><div class="k">cluster ARI</div>
+    <div class="v">{{ '%.3f'|format(s.ari_restricted) }}</div></div>
+  <div class="stat hi"><div class="k">family ARI</div>
+    <div class="v">{{ '%.3f'|format(f.ari_restricted) }}</div></div>
+  <div class="stat"><div class="k">composite</div>
+    <div class="v">{{ '%.3f'|format(s.ari_composite) }}</div></div>
+  <div class="stat"><div class="k">noise agree</div>
+    <div class="v">{{ '%.3f'|format(s.noise_agreement) }}</div></div>
+  <div class="stat"><div class="k">clusters</div>
+    <div class="v">{{ '%.0f'|format(s.k_mean) }}<span class="sub">
+      {{ s.k_min }}–{{ s.k_max }}</span></div></div>
+  <div class="stat"><div class="k">families</div>
+    <div class="v">{{ '%.0f'|format(f.k_mean) }}<span class="sub">
+      {{ f.k_min }}–{{ f.k_max }}</span></div></div>
+  <div class="stat"><div class="k">family null</div>
+    <div class="v">{{ '%.3f'|format(f.null) }}</div></div>
+  <div class="stat"><div class="k">time</div>
+    <div class="v">{{ '%.1f'|format(seconds) }}<span class="sub">s</span></div></div>
+</div>
+<p class="note"><b>Read the membership figures</b> (cluster ARI, family ARI),
+  not the composite. The composite scores <code>-1</code> as an ordinary label,
+  so a configuration leaving half its points unclustered is credited for every
+  within-noise pair. Measured: <code>leaf</code> scores 0.480 composite against
+  <code>eom</code>'s 0.024 — a 20&times; apparent advantage — while on
+  membership the two are 0.032 and 0.028. Noise agreement is near-degenerate
+  for <code>eom</code>, which clusters 99.9% of points; record it, do not gate
+  on it.
+  <br><b>Family ARI is the one that matters.</b> Cluster ids are batch
+  artefacts — one physical population is minted afresh in every batch and
+  epoch — so membership at cluster level sits at the noise floor under both
+  selection methods. Matching is what should recover it: measured on
+  sband_short, <code>eom</code> goes 0.028 &rarr; 0.519 at the p50 cut, an
+  18.6&times; gain.</p>

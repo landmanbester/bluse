@@ -114,6 +114,182 @@ details, and why the clean file's Track A survivors are *not* a subset of the
 original's, are in
 [`aug_2026_workshop/README.md`](aug_2026_workshop/README.md#which-data-files-to-use).
 
+## Running the pipeline from scratch
+
+Four commands, in order. Each reads what the previous one wrote, so the order
+matters. Run them from inside the workspace (or from anywhere with
+`--workspace DIR`).
+
+Timings below are for the full ~1.6M-hit workshop set on a normal laptop; a
+single file is proportionally quicker.
+
+```bash
+cd myrun                       # the directory containing data/
+```
+
+**1. Look at the raw data first** *(optional, ~10 s)*
+
+```bash
+bluse-explore info             # schema, row counts, which files are usable
+```
+
+Worth doing once. It tells you whether a file is readable before you spend
+seven minutes discovering it is not, and it names the corrupt-block files.
+
+**2. Track A — the classical filtering chain** *(~20 s)*
+
+```bash
+bluse-track-a                  # all files, default parameters
+bluse-track-a data/sband_short.h5      # or just one
+```
+
+Writes per file into `catalogues/`:
+
+| File | What it is |
+|---|---|
+| `<name>_cat.parquet` | every hit, plus a `flag_*` column per cut and `pass_all` |
+| `<name>_cutflow.csv` | how many hits each cut removed, alone and cumulatively |
+| `<name>_survivors.csv` | the hits that passed everything |
+
+Nothing is deleted — cuts add columns. `pass_all` is the survivor mask, so you
+can always re-derive a different chain from the same catalogue without re-running.
+
+**3. Track B step 1 — extract the features** *(~7 min, the slow step)*
+
+```bash
+bluse-features                 # all files
+bluse-features --sample 50000  # subsample per file, for a quick look
+bluse-features --list          # what features are registered, without running
+```
+
+Streams the stamp cubes, runs every feature in the registry, and writes
+`features/<name>_features.parquet` plus a combined `features/all_features.parquet`.
+This is the step that reads the 21 GB, and the only one that takes real time.
+
+It needs `catalogues/` from step 2 — it joins the Track A flags onto each hit
+for provenance.
+
+**4. Track B step 2 — cluster** *(~1–3 min)*
+
+```bash
+bluse-cluster --file sband_short          # one file
+bluse-cluster                             # the combined matrix
+bluse-cluster --file sband_short --match --seeds 5   # + families + stability
+```
+
+Writes into `clusters/`: `<tag>_clusters.parquet` (every row plus its
+`cluster_label`, and `family` if `--match`), `<tag>_summary.csv` (one row per
+cluster), `<tag>_metrics.json` (the quality and stability numbers),
+`<tag>_interesting.csv` (unclustered and spatially confined — the candidate
+list), and diagnostic PNGs.
+
+Before tuning anything, get the lay of the land without clustering at all:
+
+```bash
+bluse-cluster --file sband_short --report
+```
+
+That prints what each feature actually contributes to the distance HDBSCAN
+takes, which is usually more informative than the first clustering run.
+
+**5. Explore interactively**
+
+```bash
+bluse-bench                    # then open http://127.0.0.1:8000
+```
+
+Needs only `features/`, not `data/` — though clicking a point for its waterfall
+does read the HDF5.
+
+### Checking it worked
+
+```bash
+bluse-cluster --file sband_short --report | head -20
+```
+
+On the workshop's `sband_short` you should see `f02_abs_drift` with 42 distinct
+values and a 0.266 tie, and `x03_channel_offset` at about 24% of the global
+distance share. If those match, the chain is intact. The full set of reference
+numbers is in
+[`aug_2026_workshop/clusters/acceptance-2026-09.md`](aug_2026_workshop/clusters/acceptance-2026-09.md),
+reproducible with `uv run python aug_2026_workshop/acceptance.py`.
+
+### The short version
+
+```bash
+cd myrun && bluse-track-a && bluse-features && bluse-cluster && bluse-bench
+```
+
+## Resetting after a code change
+
+**The install is editable** (`uv sync` puts a `.pth` file pointing at `src/`),
+so editing the code takes effect on the next command with no reinstall. What
+does *not* update automatically is anything already written to disk. Derived
+files are not invalidated for you, and a stale feature matrix is silent — it
+will cluster perfectly happily and give you last week's answer.
+
+Everything below `data/` is regenerable, so when in doubt, delete and re-run.
+
+| What you changed | What is now stale | Do this |
+|---|---|---|
+| Nothing; just pulled | possibly dependencies | `uv sync --extra all` |
+| `pyproject.toml` deps | the venv | `uv sync --extra all` |
+| `track_a_filter.py`, `rfi_masks.py` | `catalogues/`, and everything after | `rm -rf catalogues features clusters` then steps 2–4 |
+| `features.py` (any feature, or `TRANSFORMS`) | `features/`, `clusters/` | `rm -rf features clusters` then steps 3–4 |
+| `track_b_cluster.py`, `metrics.py`, `matching.py`, `diagnostics.py` | `clusters/` only | `rm -rf clusters` then step 4 |
+| `bench/` — Python | nothing on disk | restart `bluse-bench` |
+| `bench/` — CSS or JS | nothing on disk | reload the browser |
+
+**Full reset, keeping the data:**
+
+```bash
+cd myrun
+rm -rf catalogues features clusters plots masks
+bluse-track-a && bluse-features && bluse-cluster
+```
+
+That is ~8 minutes and rebuilds everything from the HDF5. The `.h5` files are
+never written to, so a reset cannot cost you anything you would have to
+re-download.
+
+**Rebuild the environment too:**
+
+```bash
+cd /path/to/bluse
+rm -rf .venv
+uv sync --extra all
+```
+
+`uv.lock` is committed deliberately, so this reproduces the exact resolution
+everyone else installed rather than picking up whatever is newest.
+
+### Things that are stale in ways you will not see
+
+- **Cluster Bench caches per process.** Datasets, embeddings and runs are held
+  in memory and keyed by parameter hash. Editing `features.py` while the bench
+  is running changes nothing on screen. Restart it.
+- **The browser caches CSS and JS.** There is a cache-buster keyed on file
+  mtime, so this is normally handled — but if a style change appears not to
+  land, hard-reload before believing it.
+- **`--reload` re-imports in a fresh process** that inherits none of the
+  argparse state, so pass `--workspace` via `$BLUSE_ROOT` if you use it.
+- **A feature matrix does not record which code wrote it.** If you are unsure
+  whether `features/` predates a change to `features.py`, compare timestamps
+  (`ls -l features/ src/bluse/features.py`) or just re-extract; seven minutes
+  is cheaper than a wrong conclusion.
+
+### Verifying the code itself
+
+```bash
+uv run pytest                  # from the repo root
+```
+
+52 tests. `tests/unit/` is synthetic and runs anywhere; `tests/workspace/`
+checks golden values against real feature matrices and skips cleanly when no
+workspace is present. So `52 passed` inside a workspace and
+`48 passed, 4 skipped` outside one are both correct — the skips are the
+golden-value tests declining to run without data, not a failure.
+
 ## What the pipeline does
 
 ```

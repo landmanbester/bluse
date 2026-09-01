@@ -76,6 +76,27 @@ EPS = 1e-30
 # registry
 # ---------------------------------------------------------------------------
 
+# What a column's values MEAN, which decides which diagnostics apply to it.
+# A boolean has max_tie_fraction >= 0.5 by definition, so a tie threshold that
+# does not know the kind misfires on it by construction. Defaults to
+# "continuous" so every feature registered before this field existed -- and any
+# a workshop participant has already written -- keeps working unchanged.
+KINDS = ("continuous", "ordinal", "boolean", "flag")
+
+# Columns whose kind is not "continuous". Everything absent is continuous.
+# f02 is ORDINAL, not continuous: |driftRate| takes 42 values on an exact
+# 0.010711 Hz/s lattice on sband_short -- the seticore Taylor-tree drift step --
+# so it is a 42-level ordinal that normalise() currently rank-transforms as
+# though it were a continuum. The lattice constant is per-file (6 distinct
+# values across the eight files, spanning 5.26x), so driftSteps is a per-file
+# index and NOT interchangeable with a physical drift rate.
+COLUMN_KINDS = {
+    "f02_abs_drift": "ordinal",
+    "f12_bandwidth_hz": "ordinal",
+    "x02_time_occupancy": "ordinal",
+}
+
+
 @dataclass
 class FeatureSpec:
     name: str
@@ -112,6 +133,24 @@ def stamp_feature(*columns, description=""):
 def all_columns(kind=None):
     return [c for s in REGISTRY.values()
             if kind is None or s.kind == kind for c in s.columns]
+
+
+def column_kinds():
+    """
+    Map every registered column to its value kind.
+
+    Saturation flags are "flag"; anything named in COLUMN_KINDS takes the kind
+    declared there; everything else is "continuous". The kind is a per-COLUMN
+    property rather than a per-feature one, because one feature function may
+    emit several columns of different kinds -- f07/f08 already do.
+    """
+    out = {}
+    for col in all_columns():
+        if col.endswith("_saturated"):
+            out[col] = "flag"
+        else:
+            out[col] = COLUMN_KINDS.get(col, "continuous")
+    return out
 
 
 @dataclass
@@ -237,7 +276,18 @@ def f05_spectral_kurtosis(b):
 @stamp_feature("f06_bimodality",
                description="GLOBULAR #6. Sarle's bimodality coefficient "
                            "b = (skew^2 + 1) / kurtosis on the spectrum. "
-                           "Bounded 0-1, so normalise() leaves it alone.")
+                           "Bounded 0-1, so normalise() leaves it alone. "
+                           "LATENT IDENTITY: f06 == (f04**2 + 1) / f05 "
+                           "EXACTLY on raw values (max deviation 0.0 over "
+                           "38,576 rows). It does NOT reach the metric space "
+                           "today, because normalise() applies 'unit' to f04, "
+                           "'log-unit' to f05 and 'none' to f06, and the "
+                           "algebra does not survive those. Measured "
+                           "consequence: f06_n is only R^2=0.710 predictable "
+                           "from f04_n/f05_n, and its VIF is 7.0 against 53.1 "
+                           "for f04 and 48.5 for f05 -- so f06 is the LEAST "
+                           "redundant of the three. Changing the f05 or f06 "
+                           "transform reactivates the identity silently.")
 def f06_bimodality(b):
     s = _norm(b.spectrum)
     g = stats.skew(s, axis=1)
