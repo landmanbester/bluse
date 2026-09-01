@@ -176,3 +176,82 @@ def quality(labels, df, *, narrow_mhz=NARROW_MHZ, n_perm=5, seed=0):
         out["ami"] = float("nan")
         out["enrichment"] = float("nan")
     return out
+
+
+def stability(run_fn, seeds=(0, 1, 2, 3, 4)):
+    """
+    How reproducible is this configuration across shuffle seeds?
+
+    `run_fn(seed) -> labels`. Returns THREE separate numbers and never one
+    scalar, because collapsing them is a measured error rather than a
+    hypothetical one:
+
+      ari_composite    pairwise ARI over the full label vectors
+      ari_restricted   pairwise ARI over points clustered in BOTH runs
+      noise_agreement  agreement on the binary (labels >= 0) vector
+
+    sklearn's adjusted_rand_score treats -1 as an ordinary label, so a method
+    that leaves half its points unclustered scores agreement for every
+    within-noise pair. Measured: leaf scores composite 0.480 against eom's
+    0.024 -- a 20x apparent advantage -- but restricted to cluster membership
+    the two are 0.0316 and 0.0279, a 13% difference. The composite was
+    measuring agreement about what is noise, not agreement about what belongs
+    together.
+
+    ari_restricted is the acceptance statistic. The larger reading of those
+    numbers is that cluster membership is currently not reproducible under
+    EITHER selection method -- both sit at the noise floor -- which is what
+    matching (bluse.matching) exists to fix.
+
+    noise_agreement is near-degenerate wherever a method clusters almost
+    everything: eom clusters 99.9% of points and scores 0.999 by construction.
+    Record it; do not gate on it.
+    """
+    import itertools
+
+    from sklearn.metrics import adjusted_rand_score
+
+    seeds = tuple(seeds)
+    runs = [np.asarray(run_fn(s)) for s in seeds]
+    ks = [int(len(np.unique(r[r >= 0]))) for r in runs]
+
+    comp, rest, noise = [], [], []
+    for a, b in itertools.combinations(runs, 2):
+        comp.append(adjusted_rand_score(a, b))
+        both = (a >= 0) & (b >= 0)
+        rest.append(adjusted_rand_score(a[both], b[both])
+                    if both.sum() > 1 else float("nan"))
+        noise.append(float(((a >= 0) == (b >= 0)).mean()))
+
+    return {
+        "n_seeds": len(seeds),
+        "ari_composite": float(np.mean(comp)) if comp else float("nan"),
+        "ari_restricted": float(np.nanmean(rest)) if rest else float("nan"),
+        "noise_agreement": float(np.mean(noise)) if noise else float("nan"),
+        "k_mean": float(np.mean(ks)),
+        "k_min": int(min(ks)),
+        "k_max": int(max(ks)),
+    }
+
+
+def epoch_trace(alive_after, n_total):
+    """
+    GLOBULAR Table 1 for our runs: how much each epoch actually removed.
+
+    `alive_after[i]` is the number of hits still unclustered after epoch i+1.
+    Measured on sband_short at defaults: epoch 1 removes 87.9%, epoch 2 12.0%,
+    epoch 3 0.1%, and epochs 4-8 remove nothing at all -- so the epoch budget
+    is spent in a single pass and five of the eight epochs are dead.
+    """
+    rows = []
+    prev = n_total
+    for i, alive in enumerate(alive_after, start=1):
+        removed = prev - alive
+        rows.append({
+            "epoch": i,
+            "alive": int(alive),
+            "removed": int(removed),
+            "pct_of_original": 100.0 * removed / n_total if n_total else 0.0,
+        })
+        prev = alive
+    return rows
