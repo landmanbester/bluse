@@ -59,6 +59,11 @@ module-root = "src"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/ is a package, so `from tests.unit import fixtures` needs the repo root
+# importable. Without this the suite collects only when pytest is invoked from
+# the repo root, which is exactly the "runs on one machine" failure the
+# synthetic fixtures exist to avoid.
+pythonpath = ["."]
 markers = [
     "workspace: needs a BLUSE workspace with features/; skipped without one",
 ]
