@@ -74,11 +74,24 @@ paths.resolve_files(argv)   # bare names resolve against data/
 ```
 
 The workspace is `--workspace DIR`, else `$BLUSE_ROOT`, else the nearest
-directory at or above the cwd holding a `data/` -- bounded by the enclosing
-project (`.git` / `pyproject.toml`) and by `$HOME`, because an unbounded search
-climbs out of the checkout and silently adopts an unrelated `~/data`. Every CLI
-prints the workspace it resolved; if a run writes somewhere surprising, that
+directory at or above the cwd holding a `data/` **or** `features/` -- bounded by
+the enclosing project (`.git` / `pyproject.toml`) and by `$HOME`, because an
+unbounded search climbs out of the checkout and silently adopts an unrelated
+`~/data`. If that finds nothing, one level *below* the cwd is checked and a
+single unambiguous match is adopted, so running from the repository root works.
+Every CLI prints the workspace it resolved **and how** (`found`, `$BLUSE_ROOT`,
+`auto-detected below the cwd`, ...); if a run writes somewhere surprising, that
 line is the first thing to read.
+
+`features/` counts as a marker because Cluster Bench reads feature matrices and
+only needs `data/` for stamp thumbnails.
+
+**A command that cannot find what it needs must exit, not carry on.** Use
+`paths.require_data_dir()` or `paths.missing_workspace_message(...)`; both print
+the same actionable text, including any workspace-looking directories below the
+cwd. `bluse-bench` used to print one warning line and start anyway, which
+presents as an empty file selector and reads like a bug in the app rather than a
+wrong directory.
 
 New CLI flags go through `paths.add_workspace_arg(p)`, and any `--outdir`
 default must be `None` and be filled in *after* `parse_args` (argparse defaults

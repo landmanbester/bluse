@@ -31,6 +31,7 @@ import hashlib
 import io
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 
@@ -563,6 +564,10 @@ def main():
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--reload", action="store_true",
                     help="restart on source edits (development only)")
+    ap.add_argument("--allow-empty", action="store_true",
+                    help="start even with no feature matrices in the "
+                         "workspace. The file list is rebuilt per request, so "
+                         "a page refresh picks them up once they exist")
     paths.add_workspace_arg(ap)
     a = ap.parse_args()
     paths.set_workspace(a.workspace)
@@ -570,11 +575,25 @@ def main():
     found = available_files()
     say = lambda m: print(m, flush=True)
     say(f"\n  {paths.banner()}")
+
+    # Every other command exits here via paths.require_data_dir(). The bench
+    # used to print one warning line and start anyway, which is how you end up
+    # staring at an empty file selector wondering where your features went --
+    # the banner scrolls past and the page looks like a bug in the app. If we
+    # cannot see any feature matrices, say so the same way the rest of the CLI
+    # does and stop, unless the caller explicitly asked for an empty start.
+    if not found and not a.allow_empty:
+        sys.exit(paths.missing_workspace_message(
+            "feature matrices (*_features.parquet)", paths.features_dir())
+            + "\n\nIf the workspace is right and you have not extracted "
+              "features yet, run bluse-features -- or start anyway with "
+              "--allow-empty.")
+
     if found:
         say(f"  datasets: {', '.join(found)}")
     else:
         say(f"  NO feature matrices in {paths.features_dir()} -- "
-            f"run bluse-features first")
+            f"the file selector will be empty until you run bluse-features")
     say(f"\n  Cluster Bench -> http://{a.host}:{a.port}\n")
 
     # --reload needs an import string, and uvicorn re-imports it in a fresh

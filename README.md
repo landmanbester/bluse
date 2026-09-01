@@ -87,10 +87,18 @@ mkdir -p myrun/data && cd myrun
 bluse-explore info
 ```
 
-Every command prints the workspace it resolved on startup. It is found by, in
-order: `--workspace DIR`, then `$BLUSE_ROOT`, then the nearest directory at or
-above the cwd containing a `data/`, then the cwd. So `cd`-ing anywhere inside a
-workspace just works, and
+Every command prints the workspace it resolved on startup, and how. It is found
+by, in order: `--workspace DIR`, then `$BLUSE_ROOT`, then the nearest directory
+at or above the cwd that has a `data/` or `features/`, then — if that finds
+nothing — a single unambiguous match one level *below* the cwd. So `cd`-ing
+anywhere inside a workspace works, and so does running from the repository root
+with the workspace in a subdirectory:
+
+```
+workspace: /home/you/bluse/aug_2026_workshop  (auto-detected below the cwd)
+```
+
+That line is the first thing to read if a run writes somewhere surprising. And
 
 ```bash
 export BLUSE_ROOT=/scratch/bluse

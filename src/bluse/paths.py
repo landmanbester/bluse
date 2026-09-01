@@ -47,9 +47,10 @@ _root: str | None = None
 
 def set_workspace(path: str | None) -> None:
     """Pin the workspace. Called by every CLI before defaults are resolved."""
-    global _root
+    global _root, _how
     if path:
         _root = os.path.abspath(os.path.expanduser(path))
+        _how = "--workspace"
 
 
 # Walking up stops at a project boundary. Without this, running from a checkout
@@ -58,31 +59,56 @@ def set_workspace(path: str | None) -> None:
 # against the wrong directory.
 _BOUNDARY_MARKERS = (".git", "pyproject.toml")
 
+# What makes a directory a workspace. `features/` counts as well as `data/`:
+# Cluster Bench reads feature matrices and never needs the 21 GB of HDF5 unless
+# you click a point for its waterfall, so a features-only directory is a
+# perfectly good workspace for it.
+_WORKSPACE_MARKERS = ("data", "features")
 
-def _discover() -> str:
+# How the workspace was arrived at, for the banner. Set by workspace().
+_how = ""
+
+
+def _looks_like_workspace(d: str) -> bool:
+    return any(os.path.isdir(os.path.join(d, m)) for m in _WORKSPACE_MARKERS)
+
+
+def _discover() -> tuple[str, str]:
     start = os.path.abspath(os.getcwd())
     home = os.path.abspath(os.path.expanduser("~"))
+
     d = start
     while True:
-        if os.path.isdir(os.path.join(d, "data")):
-            return d
+        if _looks_like_workspace(d):
+            return d, "found" if d == start else "found above the cwd"
         # Check the boundary directory itself, then stop.
         if any(os.path.exists(os.path.join(d, m)) for m in _BOUNDARY_MARKERS):
-            return start
+            break
         parent = os.path.dirname(d)
         if parent == d or d == home:
-            return start
+            break
         d = parent
+
+    # Nothing at or above the cwd. Before giving up, look one level DOWN: a
+    # freshly cloned checkout has its workspace in a subdirectory, and running
+    # from the repository root is the obvious thing to try. Only adopt an
+    # unambiguous single match, and say so in the banner -- never silently.
+    near = _nearby_candidates(limit=2)
+    if len(near) == 1:
+        return os.path.join(start, near[0]), "auto-detected below the cwd"
+    return start, "the cwd, and it is not a workspace"
 
 
 def _nearby_candidates(limit: int = 5) -> list[str]:
     """Directories one level below the cwd that do look like workspaces."""
     out = []
     try:
-        for name in sorted(os.listdir(os.getcwd())):
-            if name.startswith(".") or not os.path.isdir(name):
+        base = os.getcwd()
+        for name in sorted(os.listdir(base)):
+            p = os.path.join(base, name)
+            if name.startswith(".") or not os.path.isdir(p):
                 continue
-            if os.path.isdir(os.path.join(name, "data")):
+            if _looks_like_workspace(p):
                 out.append(name)
     except OSError:
         pass
@@ -90,10 +116,13 @@ def _nearby_candidates(limit: int = 5) -> list[str]:
 
 
 def workspace() -> str:
-    global _root
+    global _root, _how
     if _root is None:
         env = os.environ.get(ENV_VAR)
-        _root = os.path.abspath(os.path.expanduser(env)) if env else _discover()
+        if env:
+            _root, _how = os.path.abspath(os.path.expanduser(env)), f"${ENV_VAR}"
+        else:
+            _root, _how = _discover()
     return _root
 
 
@@ -112,26 +141,33 @@ def require_data_dir() -> str:
     """data_dir(), but exit with something actionable if it is not there."""
     p = data_dir()
     if not os.path.isdir(p):
-        msg = [f"No data directory at {p}",
-               "",
-               f"The workspace resolved to {workspace()} and it has no data/."]
-        near = _nearby_candidates()
-        if near:
-            msg += ["", "These directories below the cwd look like workspaces:"]
-            msg += [f"    --workspace {n}" for n in near]
-        msg += ["",
-                "Otherwise cd into a directory that has a data/, or point at one:",
-                "",
-                f"    export {ENV_VAR}=/path/to/workspace",
-                "    ...or pass --workspace /path/to/workspace",
-                "",
-                "See the README section 'Getting the data'."]
-        sys.exit("\n".join(msg))
+        sys.exit(missing_workspace_message("data directory", p))
     return p
 
 
 def banner() -> str:
-    return f"workspace: {workspace()}"
+    root = workspace()          # resolves _how as a side effect
+    return f"workspace: {root}" + (f"  ({_how})" if _how else "")
+
+
+def missing_workspace_message(what: str, path: str) -> str:
+    """The 'I cannot find your data' message, worded the same everywhere."""
+    msg = [f"No {what} at {path}",
+           "",
+           f"The workspace resolved to {workspace()}"
+           + (f" ({_how})." if _how else ".")]
+    near = _nearby_candidates()
+    if near:
+        msg += ["", "These directories below the cwd look like workspaces:"]
+        msg += [f"    --workspace {n}" for n in near]
+    msg += ["",
+            "Otherwise cd into a directory that has one, or point at it:",
+            "",
+            f"    export {ENV_VAR}=/path/to/workspace",
+            "    ...or pass --workspace /path/to/workspace",
+            "",
+            "See the README section 'Getting the data'."]
+    return "\n".join(msg)
 
 
 def add_workspace_arg(parser) -> None:
