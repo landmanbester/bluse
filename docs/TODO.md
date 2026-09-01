@@ -91,8 +91,18 @@ against `pct` at matched counts.
 name. `tests/unit/test_matching.py` already exercises `gap` on the separated
 fixture, which is the case it should still pass.
 
-### 2. `f09_temporal_skew` down-weighting
-*Implementation review §5. The real precursor to the scaling spec.*
+### 2. `f09_temporal_skew` down-weighting — **DONE 2026-09-01**
+
+Result in [`scaling-experiment-2026-09.md`](scaling-experiment-2026-09.md).
+Short version: equalisation **helps under `leaf`** (family ARI 0.4888 → 0.6659
+at 36 families, median family span 265 → 79 MHz, +95% at 500 families) and is
+**catastrophic under `eom`** (0.5190 → 0.0438). `f02` alone accounts for the
+whole collapse — boosting only `f02` reproduces it to three figures — because
+equalisation amplifies its 26.6% tie 5.2×.
+
+**Consequence: P1 items 4 and 5 are coupled and reordered — `f02` first.**
+
+*Original task, for context:*
 
 `f09` is 6.7% of the global distance share and **15.5% of the k-NN share** —
 the largest local contributor — and carries no flag because flags key on the
@@ -122,16 +132,7 @@ logic; and `bench/templates/_controls.html` for the caption.
 
 ## P1 — the deferred scaling work, gated on P0-2
 
-### 4. Contribution-equalising scaling mode
-Robust scaling equalises the **IQR**, but HDBSCAN responds to **variance**, and
-the IQR-to-variance ratio depends on distribution shape — so contributions run
-1.7%–24.3% globally. Target the distance share directly rather than a spread
-proxy. Evaluate against `narrow_frac` and `ari_restricted`, not by eye.
-
-**The case is weaker than the review documents assumed** (see P0-2). Do not
-build it before that experiment.
-
-### 5. `f02` ordinal rework
+### 4. `f02` ordinal rework — **now blocks item 5**
 `is_zero_drift` indicator plus non-zero drift on its **native linear grid**.
 Two constraints, both measured:
 - `driftSteps` exists in the HDF5 and in `catalogues/*_cat.parquet` but **not**
@@ -142,6 +143,18 @@ Two constraints, both measured:
 
 Note the boolean introduces a 0.734 tie by construction, which is why the
 feature registry's `kind` field exists — tie thresholds skip `boolean`.
+### 5. Contribution-equalising scaling mode
+Robust scaling equalises the **IQR**, but HDBSCAN responds to **variance**, and
+the IQR-to-variance ratio depends on distribution shape — so contributions run
+1.7%–24.3% globally. Target the distance share directly rather than a spread
+proxy. Evaluate against `narrow_frac` and `ari_restricted`, not by eye.
+
+**Measured 2026-09-01 (P0-2): it works, but only after `f02` is fixed.** Under
+`leaf` it buys family ARI 0.4888 → 0.6659 and median span 265 → 79 MHz. Under
+`eom` it collapses the run, entirely because it amplifies `f02`'s 26.6% tie
+5.2×. Weight caps do not rescue it. Report per method; it is not a universal
+improvement.
+
 
 ---
 
