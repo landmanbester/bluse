@@ -25,6 +25,8 @@ papers/                          reference papers + our summaries
   BLUSE-technical-reference.md   how BLUSE works, dense, for agents
   Astronomaly-overview.md        Astronomaly/Protege, for humans
   Astronomaly-technical-reference.md   ... dense, plus BLUSE application guide
+  GLOBULAR-overview.md           the Track B method, for humans
+  GLOBULAR-technical-reference.md      ... dense, plus a map onto our code
   *.pdf                          source papers (untracked -- see .gitignore)
 
 pyproject.toml                   installable package, uv_build backend
@@ -301,7 +303,7 @@ original metadata plus `n_beams`, `n_obs_at_freq`, `log_snr`, `log_power`,
   function may emit several columns when they share expensive work. Features
   return **raw** values; the GLOBULAR log/quantile/unit transforms are applied
   separately by `normalise()`, so both forms reach Track E.
-- All 13 GLOBULAR features (Brzycki et al. 2025) plus 3 BLUSE-specific extras.
+- All 13 GLOBULAR features (Jacobson-Bell et al. 2025) plus 3 BLUSE-specific extras.
   **They are not numerically comparable to published GLOBULAR values**: our
   spectral window is ~121–196 Hz against their 2.7 kHz, which is narrower than
   their *minimum* sweep bandwidth. `f08_turning_bw_hz` is consequently
@@ -419,6 +421,10 @@ BLUSE team before redistributing any of it or making the repository public.
 
 - Czech et al. 2026, BLUSE, arXiv:2607.23651 — the instrument
 - Tremblay et al. 2026, K2-18b VLA+MeerKAT, arXiv:2602.09553 — the filtering recipe
-- Brzycki et al. 2025, GLOBULAR clustering, AJ, doi:10.3847/1538-3881/adb8e7 — Track B
+- Jacobson-Bell et al. 2025, GLOBULAR clustering, AJ 169:206,
+  doi:10.3847/1538-3881/adb8e7, arXiv:2411.16556 — Track B. Summaries in
+  `papers/GLOBULAR-overview.md` and `papers/GLOBULAR-technical-reference.md`.
+  **Not** "Brzycki et al." — that was our error until 2026-09; Brzycki authored
+  `setigen`/`blscint`, which the paper merely uses.
 - Lochner & Bassett 2021, Astronomaly, arXiv:2010.11202
 - Lochner & Rudnick 2024, Protégé, arXiv:2411.04188

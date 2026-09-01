@@ -89,7 +89,7 @@ Also relevant: **COSMIC's VLASS survey description** (2025) for a commensal-surv
 
 ### 2.2 Feature engineering + clustering — GLOBULAR
 
-**Brzycki et al. 2025**, *"Anomaly Detection and RFI Classification with Unsupervised Learning in Narrowband Radio Technosignature Searches"* (AJ). The most directly transferable published method.
+**Jacobson-Bell et al. 2025**, *"Anomaly Detection and RFI Classification with Unsupervised Learning in Narrowband Radio Technosignature Searches"* (AJ 169:206). The most directly transferable published method. Summarised in `papers/GLOBULAR-overview.md` (human) and `papers/GLOBULAR-technical-reference.md` (dense).
 
 - **13 hand-crafted features** per hit: observation frequency (quantile-transformed to uniform), |drift rate| (quantile-transformed to Gaussian), SNR, spectral-window skewness, spectral-window kurtosis, spectral bimodality (Sarle's coefficient), correlation between kurtosis and log bandwidth, turning-point bandwidth, temporal-window skewness, time-series standard deviation, power-spectrum standard deviation, signal bandwidth at 1% of max power, and "redness" of the spectral periodogram (detects comb structures).
 - **HDBSCAN** clustering: `n_pts=4`, `ρ_pts=2`, `ε_m=0.18`. Run in **batches of ~3000 hits over 8 iterative epochs**, with cross-batch cluster matching.
@@ -207,7 +207,7 @@ Train on free labels from the spatial filter (high multiplicity = RFI, §2.5), t
 
 - Czech, D. J. et al. 2026, *Breakthrough Listen's Automated Commensal Technosignature Survey with MeerKAT*, [arXiv:2607.23651](https://arxiv.org/abs/2607.23651)
 - Tremblay, C. D. et al. 2026, *A Narrowband Technosignature Search toward the Hycean Candidate K2-18b Using the VLA and MeerKAT*, [arXiv:2602.09553](https://arxiv.org/html/2602.09553) · [IOP](https://iopscience.iop.org/article/10.3847/1538-3881/ae448e)
-- Brzycki, B. et al. 2025, *Anomaly Detection and Radio-frequency Interference Classification with Unsupervised Learning in Narrowband Radio Technosignature Searches*, AJ, [IOP](https://iopscience.iop.org/article/10.3847/1538-3881/adb8e7)
+- Jacobson-Bell, B., Croft, S., Choza, C., et al. 2025, *Anomaly Detection and Radio-frequency Interference Classification with Unsupervised Learning in Narrowband Radio Technosignature Searches*, AJ 169:206, [IOP](https://iopscience.iop.org/article/10.3847/1538-3881/adb8e7), arXiv:2411.16556
 - Tremblay, C. D. et al. 2025, *COSMIC's Large-scale Search for Technosignatures during the VLA Sky Survey*, AJ, [IOP](https://iopscience.iop.org/article/10.3847/1538-3881/ad9ea5)
 - Ma, P. X., Croft, S. et al. 2023, *A deep neural network based reverse radio spectrogram search algorithm*, RASTI, [arXiv:2302.13854](https://arxiv.org/abs/2302.13854)
 - Pardo, S., Poznanski, D. et al. 2025, *Using anomaly detection to search for technosignatures in Breakthrough Listen observations*, [arXiv:2505.03927](https://arxiv.org/abs/2505.03927)

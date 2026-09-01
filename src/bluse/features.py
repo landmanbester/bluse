@@ -2,9 +2,13 @@
 """
 features.py -- extensible feature registry for BLUSE hits.
 
-Implements the 13 features of GLOBULAR clustering (Brzycki et al. 2025,
-arXiv:2411.16556) plus a small number of BLUSE-specific extras, and provides a
-registry so more can be added without touching the extraction driver.
+Implements the 13 features of GLOBULAR clustering (Jacobson-Bell et al. 2025,
+AJ 169:206, doi:10.3847/1538-3881/adb8e7, arXiv:2411.16556) plus a small number
+of BLUSE-specific extras, and provides a registry so more can be added without
+touching the extraction driver.
+
+See papers/GLOBULAR-technical-reference.md for the full spec, including a table
+of the three places our normalisation departs from the published one.
 
 ADDING A FEATURE
 ----------------

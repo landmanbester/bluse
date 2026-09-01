@@ -4,8 +4,9 @@ track_b_cluster.py -- HDBSCAN over the Track B features, to name the RFI.
 
 The point is not to score hits as anomalous. It is to discover the *families*
 of interference present in the data, so that "here are 200 unexplained hits"
-replaces "here are some outliers". Brzycki et al. 2025 identified ~59 distinct
-RFI clusters this way and cut false positives by 93.1%.
+replaces "here are some outliers". Jacobson-Bell et al. 2025 identified ~59
+distinct RFI families this way and cut false-positive hits by 93.1% (events by
+99.3%, 288 -> 2). See papers/GLOBULAR-technical-reference.md.
 
     bluse-cluster                                          # all_features.parquet
     bluse-cluster --file sband_short

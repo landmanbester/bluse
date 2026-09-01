@@ -162,8 +162,9 @@ magnitude. They are written up under
 
 ### Track B step 1 — features
 
-Implements the 13 features of GLOBULAR clustering (Brzycki et al. 2025,
-arXiv:2411.16556) — spectral skew and kurtosis, bimodality, the
+Implements the 13 features of GLOBULAR clustering ([Jacobson-Bell et al.
+2025](papers/GLOBULAR-overview.md), AJ 169:206) — spectral skew and kurtosis,
+bimodality, the
 kurtosis-versus-bandwidth turning point, temporal structure, "redness" —
 plus three BLUSE-specific extras (drift residual, time occupancy, channel
 offset). Raw values and normalised `*_n` versions are both kept, so a model
@@ -213,7 +214,10 @@ which is what a single emitter looks like.
 **Known gap: cluster ids are distinct but not *matched* across batches.** The
 same RFI family recurs in every batch and gets a fresh id each time. GLOBULAR
 closed this with cross-batch matching to reach ~59 named families; we have not
-implemented it. Until then, read the cluster table as "these hits grouped with
+implemented it. Their recipe — centroid keying, PCA to 6 components, t-SNE, then
+HDBSCAN on the embedding — is written up in
+[`papers/GLOBULAR-technical-reference.md`](papers/GLOBULAR-technical-reference.md)
+§7 if you want to pick it up. Until then, read the cluster table as "these hits grouped with
 something" rather than as a taxonomy, and treat the **unclustered** set — which
 is well defined either way — as the actual output.
 
@@ -299,7 +303,9 @@ aug_2026_workshop/       the working record: results, findings, decisions
     catalogues/          tracked cut-flows and survivor lists
     clusters/            tracked cluster summaries
     data/               ← put the .h5 files here (gitignored, 21 GB)
-papers/                  reference literature
+papers/                  reference literature + our summaries
+    GLOBULAR-*.md        the Track B method: overview (human) and
+                         technical reference (dense, maps onto our code)
 AGENTS.md                notes for agents working in this repo — including a
                          list of gotchas that cost real debugging time
 ```
@@ -316,7 +322,12 @@ and the flags, and `row` indexes back into the HDF5 stamp cube.
 Still open, in rough priority order:
 
 - **Cross-batch cluster matching** — the gap that stands between "1,187
-  clusters" and "~59 named RFI families".
+  clusters" and "~59 named RFI families". Recipe in
+  `papers/GLOBULAR-technical-reference.md` §7.
+- **Seed signals** — inject identical synthetic drifting narrowband signals into
+  every batch, so real signals resembling them have something to cluster with
+  and can be tracked through the epochs. Cheap, and the paper's own suggestion
+  for tuning the method toward a signal type by example.
 - **Track E: a weak-supervision classifier** on `weak_label` / `group_id`.
   The columns are already in every feature parquet.
 - **Tracks C and D** — Astronomaly-style active learning, and self-supervised
