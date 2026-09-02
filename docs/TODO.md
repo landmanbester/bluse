@@ -202,32 +202,47 @@ is not lost: zero drift is a real RFI marker (odds ratio 2.96, p = 7e-31) but
 `x01_drift_residual` — drift-trajectory coherence — ranks **1st** with 4.9×
 more. Pinned by `test_f02_keeps_its_rank_transform`.
 
-### 5. Contribution-equalising scaling mode — **UNBLOCKED, ready to spec**
+### 5. Contribution-equalising scaling mode — **BUILT, PENDING A SHIP DECISION**
 
-Robust scaling equalises the **IQR**, but HDBSCAN responds to **variance**, and
-the IQR-to-variance ratio depends on distribution shape — so contributions run
-1.7%–24.3% globally. Target the distance share directly rather than a spread
-proxy. Evaluate against `narrow_frac` and `ari_restricted`, not by eye.
+Result in [`equalising-scaling-experiment-2026-09.md`](equalising-scaling-experiment-2026-09.md).
+Branch `feature/equalising-scaling`.
 
-**It was never blocked by `f02`** — that inference from P0-2 was tested in P1-4
-and is false. Repairing `f02` leaves `eom` broken under equalisation (0.125
-against 0.519 plain) and makes `leaf` *worse* (0.666 → 0.605). `f02` was the
-vehicle of the `eom` collapse, not its cause; `eom`'s single root-level
-stability comparison is fragile to reweighting in general.
+Shipped as `--scaling robust-equalised` / a Bench dropdown option: `w ∝ 1/σ` on
+the robust-scaled matrix, i.e. **winsorised standardisation**. Deterministic,
+1.7 ms, and its 35k-sample weights match the full population to 0.78%.
 
-**Spec it against these measured constraints:**
-- **`leaf` only.** Under `eom` equalisation collapses the run whatever `f02`
-  does, and weight caps do not rescue it (capped at 2.0, `eom` sits at 0.0742).
-- **Skip `boolean` and `flag` columns.** This is what the registry's `kind`
-  field is for. A boolean's low variance draws a huge equalising weight.
-- **Report at a stated family count in the non-degenerate region (≥36),**
-  where the narrow share is non-zero. Below ~30 families every leaf
-  configuration has a 0.000% narrow share, and famARI there is meaningless.
-- **Best measured configuration to beat:** equalisation over the existing
-  feature set, `leaf`, famARI **0.7683 at 16 families** / **0.6659 at 36**,
-  median span 78.6 MHz against the 265.0 MHz baseline.
+**It does not meet acceptance criterion 1** (famARI ≥0.60, median span ≤120 MHz
+at 36 families). Measured 0.4949 / 206.6 MHz at seeds 0–2, and 0.513 / 183.4 MHz
+averaged over three independent seed triples, against a `robust` baseline of
+0.479 / 265.5 MHz. So it is a **real but modest** gain: +0.034 family ARI and a
+31% reduction in median family span, consistent in sign on all three seed
+triples.
 
----
+The criterion was written from P0-2's 0.6659 / 78.6 MHz. Those figures came
+from the k-NN strategy running on the pre-P0-3 biased estimator, and that
+strategy is now known to be ill-posed, so **the target was never reachable by a
+well-posed method.** Retire the criterion or decline the mode — do not massage
+the result.
+
+**The k-NN strategy was measured and rejected** despite scoring 0.83 famARI
+against the closed form's 0.51:
+- Its target is **unattainable for a tied column**. A tied column contributes
+  exactly zero to every tie–tie pair and those pairs are disproportionately
+  near neighbours, so no weight lifts `f02` (26.6% tie) to parity; the
+  iteration pins it at the weight ceiling from step 2 forever.
+- It does not equalise. It collapses the metric from 15 effective dimensions
+  to **2.22**, top three columns holding 96% of the squared weight — the
+  opposite of the mode's name.
+- A **three-line hand-built `f02`+`f01` weighting beats it** (0.850 vs 0.826),
+  while arbitrary column pairs at the same effective dimensionality score
+  0.43–0.50. So it is an expensive way of rediscovering "cluster on drift and
+  frequency", not a scaling mode.
+
+**New P2 item this raised:** `f02`+`f01` alone gives famARI 0.850 and a 12.1 MHz
+median span, far beyond the full 15-column set. That is a **feature-selection**
+finding (and partly circular, since weighting frequency improves a frequency
+coherence metric), and it suggests the other thirteen hand-crafted features may
+contribute mostly noise at this granularity. Worth its own investigation.
 
 ## P2 — Bench features from the original review, not yet built
 
