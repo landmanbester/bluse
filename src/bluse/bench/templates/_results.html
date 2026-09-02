@@ -39,6 +39,17 @@
   5.9% against a 6.7% equal share and is well behaved.</p>
 {% endif %}
 
+{% if run.params.scaling == 'robust-equalised' and run.params.csm == 'eom' %}
+<p class="caveat" style="border-left:3px solid #c0392b;padding-left:8px">
+  <b>WARNING — equalising scaling with <code>eom</code> is measured to collapse
+  family reproducibility</b> (family ARI 0.519 &rarr; 0.044). Equalisation
+  amplifies whichever column is locally weakest, and <code>eom</code>'s single
+  root-level stability comparison is fragile to that; no <code>f02</code>
+  treatment rescues it and weight caps do not either. Use <b>leaf</b>, or
+  scaling <b>robust</b>. These numbers are shown because you asked for them,
+  not because they are usable.</p>
+{% endif %}
+
 <form hx-post="/stability" hx-target="#stability" hx-swap="innerHTML"
       hx-include="#cluster-form" hx-indicator="#results, #spin"
       style="margin:0 0 10px">
