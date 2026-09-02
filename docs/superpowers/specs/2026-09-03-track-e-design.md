@@ -1,5 +1,15 @@
 # Track E — a morphology-only RFI score for every BLUSE hit
 
+> **Superseded numbers, kept as the record of what was specified.** Every
+> figure below was measured with a float32 feature matrix and a single seed.
+> The shipped configuration is float64 averaged over three seeds, which moves
+> most of them and reverses one conclusion — the 16-feature model now scores
+> *higher* than the 12-feature default, so the D1 rationale in §5 is restated
+> in [`../../track-e-2026-09.md`](../../track-e-2026-09.md) §4. Current numbers
+> and the precision measurement itself are in §9 of that document. Annotated
+> rather than rewritten, so the design decisions stay legible as they were
+> taken.
+
 **Date:** 2026-09-03 · **Status:** spec, measured · **Owner:** last day of the
 August 2026 workshop
 

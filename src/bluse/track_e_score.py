@@ -20,6 +20,13 @@ The evidence that it works is that it extrapolates. Trained only on <=2 beams
 and >=32 beams, scored on the untrained 3-31 range, it reproduces beam
 multiplicity monotonically across every bin (docs/track-e-2026-09.md).
 
+The matrix is float64 and the score is averaged over three seeds. Neither is
+decoration: HistGradientBoosting draws its 256 bin edges from a random
+200,000-row subsample, so both the dtype and the seed move where a value falls
+relative to a split, and a single seed's per-hit verdict is substantially
+churn. See #9 of that document -- it also records the control that makes the
+mechanism unambiguous.
+
 WHAT IT IS NOT -- read this before quoting a number
 ---------------------------------------------------
 The labels are POSITIVE-UNLABELLED. `weak_label == 0` means *seen in <=2
@@ -34,17 +41,22 @@ the spatial filter is a sieve, not a proof. Therefore:
 
 It is also a PROXY: it inherits every blind spot of the filter it learned from.
 And brightness is partly confounded with the label, because a signal must be
-bright to be detected in 32 beams -- within-SNR-decile AUC is 0.9243 against
-0.9895 overall, so brightness contributes but does not carry the result.
+bright to be detected in 32 beams -- within-SNR-decile AUC is 0.8934 against
+0.9899 overall, so brightness contributes but does not carry the result.
 
 DEFAULT FEATURE SET
 -------------------
-The 12 stamp-morphology columns, not all 16. It costs 0.0004 AUC (0.9891 vs
-0.9895) and buys three things: it cannot relearn the RFI frequency mask, so it
-is not circular with Track A's own band cut; it is the variant that transfers
-to an unseen band (held-out L-band 0.9895 stamp against 0.9834 for all 16); and
-"twelve numbers computed from the pixels" is a claim that can be defended.
-`--features all` ships alongside it and both are reported.
+The 12 stamp-morphology columns, not all 16. It costs 0.0012 AUC (0.9899 against
+0.9911 for all 16 -- the 16-feature model is the better one on this survey) and
+buys the argument the headline rests on: it cannot relearn the RFI frequency
+mask, so "morphology beats the classical filter's own flags" is not partly
+circular with that filter's first cut. It also matters in use, since the score
+is applied to Track A survivors, which sit outside the mask by construction.
+
+An earlier draft also claimed stamp transfers better to an unseen band. At
+these settings that is false -- held out, stamp against all-16 is L 0.9911 /
+0.9872 but UHF 0.8976 / 0.9127 and S 0.8962 / 0.9157. One band of three.
+`--features all` ships alongside and both are reported.
 """
 
 import numpy as np
@@ -53,6 +65,19 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.model_selection import GroupKFold
 
 from . import features as F
+
+# Every feature column in the parquet is float64, and every other science path
+# in this package -- features.py, track_a_filter.py, track_b_cluster.py,
+# matching.py, diagnostics.py, metrics.py -- asks for float64 explicitly. The
+# feature matrix here stays float64 for the same reason, so that no result
+# depends on where a value happens to land relative to a bin edge.
+#
+# HistGradientBoosting bins to 256 levels and upcasts to float64 internally, so
+# the measured cost of narrowing is small -- but "small" was an assumption
+# until it was measured, and the measurement is in docs/track-e-2026-09.md #9.
+# One constant, so a future narrowing is a one-line change with a reason
+# attached rather than five scattered casts.
+FEATURE_DTYPE = np.float64
 
 # The label. `weak_label` is derived from `n_beams` and `beam_frac`, so any
 # feature set containing one of these predicts itself. test_track_e.py asserts
@@ -99,8 +124,8 @@ def feature_columns(name):
     return list(FEATURE_SETS[name])
 
 
-def fit_score(df, *, features="stamp", n_splits=5, seed=0, exclude_mk=True,
-              max_iter=300):
+def fit_score(df, *, features="stamp", n_splits=5, seed=0, n_seeds=3,
+              exclude_mk=True, max_iter=300):
     """
     Fit group-fold models on the spatial filter's labels and score every row.
 
@@ -115,6 +140,23 @@ def fit_score(df, *, features="stamp", n_splits=5, seed=0, exclude_mk=True,
     pointing, an RFI environment and a calibration, so a random row split
     leaks.
 
+    AVERAGED OVER `n_seeds` SEEDS, and that is not a refinement -- a single
+    seed's per-hit verdict is substantially churn. HistGradientBoosting picks
+    its 256 bin edges from a 200,000-row random subsample, so the seed moves
+    where values fall relative to a split, and 300 boosting rounds amplify it.
+    Measured across seeds 0-2 (docs/track-e-2026-09.md #9): ROC-AUC is stable
+    to +/-0.00004, but the `contrarian` count swings 2,972-3,368 and the
+    shortlist shares only 93% of its membership between two seeds.
+
+    Averaging three seeds raises AUC from 0.9892 to 0.9899, fixes the counts,
+    and halves the contrarian set -- because roughly half of it at any one seed
+    was marginal hits pushed below the threshold by that seed's bin edges. It
+    costs 3x 27 seconds. `n_seeds=1` reproduces the single-seed behaviour.
+
+    Averaging does not weaken the no-leak property: every seed uses the same
+    GroupKFold split, so a row's score is the mean of models none of which saw
+    its observation.
+
     Returns (score, fold, info). `fold` is -1 for any row in no training fold.
     """
     cols = feature_columns(features)
@@ -122,7 +164,7 @@ def fit_score(df, *, features="stamp", n_splits=5, seed=0, exclude_mk=True,
     if missing:
         raise ValueError(f"missing columns: {missing}")
 
-    X = df[cols].to_numpy(np.float32)
+    X = df[cols].to_numpy(FEATURE_DTYPE)
     y = df["weak_label"].to_numpy().astype(np.int8)
     groups = df["group_id"].to_numpy()
 
@@ -152,24 +194,32 @@ def fit_score(df, *, features="stamp", n_splits=5, seed=0, exclude_mk=True,
     if n_groups < n_splits:
         raise ValueError(f"{n_groups} groups is fewer than n_splits={n_splits}")
 
-    score = np.full(len(df), np.nan)
+    if n_seeds < 1:
+        raise ValueError("n_seeds must be at least 1")
+    seeds = [seed + i for i in range(n_seeds)]
+
+    score = np.zeros(len(df))
     fold = np.full(len(df), -1, dtype=np.int8)
     rest = np.flatnonzero(~train)
     acc = np.zeros(len(rest))
 
-    folds = []
-    for k, (tr, te) in enumerate(GroupKFold(n_splits)
-                                 .split(tr_idx, y[tr_idx], groups[tr_idx])):
-        model = HistGradientBoostingClassifier(
-            max_iter=max_iter, early_stopping=False, random_state=seed)
-        model.fit(X[tr_idx[tr]], y[tr_idx[tr]])
-        score[tr_idx[te]] = model.predict_proba(X[tr_idx[te]])[:, 1]
+    splits = list(GroupKFold(n_splits).split(tr_idx, y[tr_idx], groups[tr_idx]))
+    folds = [{"fold": k, "n_train": int(len(tr)), "n_test": int(len(te))}
+             for k, (tr, te) in enumerate(splits)]
+    for k, (_, te) in enumerate(splits):
         fold[tr_idx[te]] = k
-        if len(rest):
-            acc += model.predict_proba(X[rest])[:, 1]
-        folds.append({"fold": k, "n_train": int(len(tr)), "n_test": int(len(te))})
+
+    for sd in seeds:
+        for tr, te in splits:
+            model = HistGradientBoostingClassifier(
+                max_iter=max_iter, early_stopping=False, random_state=sd)
+            model.fit(X[tr_idx[tr]], y[tr_idx[tr]])
+            score[tr_idx[te]] += model.predict_proba(X[tr_idx[te]])[:, 1]
+            if len(rest):
+                acc += model.predict_proba(X[rest])[:, 1]
+    score[tr_idx] /= n_seeds
     if len(rest):
-        score[rest] = acc / n_splits
+        score[rest] = acc / (n_seeds * n_splits)
 
     info = {
         "features": features,
@@ -177,6 +227,9 @@ def fit_score(df, *, features="stamp", n_splits=5, seed=0, exclude_mk=True,
         "dropped_columns": dropped,
         "n_splits": n_splits,
         "seed": seed,
+        "n_seeds": n_seeds,
+        "seeds": seeds,
+        "dtype": np.dtype(FEATURE_DTYPE).name,
         "max_iter": max_iter,
         "exclude_mk": bool(exclude_mk),
         "n_rows": int(len(df)),
@@ -224,7 +277,7 @@ def evaluation_mask(df, *, exclude_mk=True):
     Not a detail. Scoring a file that was excluded from training and then
     folding it into the headline measures distribution shift and calls it
     accuracy. Measured: including mk_sample_hits in the evaluation of a model
-    that never trained on it moves the stamp AUC from 0.9884 to 0.9795, because
+    that never trained on it moves the stamp AUC from 0.9899 to 0.9821, because
     the model scores that pre-filtered file's confined hits as RFI. That is a
     real and useful finding -- it is reported by validate() under "ood" -- but
     it is not a statement about how well the score works on the survey.
@@ -235,7 +288,7 @@ def evaluation_mask(df, *, exclude_mk=True):
     return m
 
 
-def validate(df, *, n_splits=5, seed=0, exclude_mk=True,
+def validate(df, *, n_splits=5, seed=0, n_seeds=3, exclude_mk=True,
              importance_sample=20_000, verbose=True):
     """
     Reproduce every number the write-up quotes, from the shipped code.
@@ -272,14 +325,15 @@ def validate(df, *, n_splits=5, seed=0, exclude_mk=True,
     y = df["weak_label"].to_numpy()[ev].astype(int)
     rep = {"n_rows": int(len(df)), "n_evaluated": int(ev.sum()),
            "n_groups": int(df["group_id"].nunique()), "exclude_mk": exclude_mk,
-           "base_rate": float(y.mean()), "n_splits": n_splits, "seed": seed}
+           "base_rate": float(y.mean()), "n_splits": n_splits, "seed": seed,
+           "n_seeds": n_seeds, "dtype": np.dtype(FEATURE_DTYPE).name}
 
     # --- ablation ---------------------------------------------------------
     say("  ablation (4 feature sets)...")
     oof, rep["ablation"] = {}, {}
     for name in ("flags", "meta", "stamp", "all"):
         s, _, info = fit_score(df, features=name, n_splits=n_splits, seed=seed,
-                               exclude_mk=exclude_mk)
+                               n_seeds=n_seeds, exclude_mk=exclude_mk)
         oof[name] = s
         rep["ablation"][name] = {
             "n_features": len(info["columns"]),
@@ -350,11 +404,17 @@ def validate(df, *, n_splits=5, seed=0, exclude_mk=True,
         got = {}
         for name in ("stamp", "all"):
             cols = feature_columns(name)
-            m = HistGradientBoostingClassifier(
-                max_iter=300, early_stopping=False, random_state=seed)
-            m.fit(edf.loc[tr, cols].to_numpy(np.float32), y[tr])
-            got[name] = _auc(y[te], m.predict_proba(
-                edf.loc[te, cols].to_numpy(np.float32))[:, 1])
+            Xtr = edf.loc[tr, cols].to_numpy(FEATURE_DTYPE)
+            Xte = edf.loc[te, cols].to_numpy(FEATURE_DTYPE)
+            # Averaged over the same seeds as the headline, so the transfer
+            # number and the in-band number are measured the same way.
+            p = np.zeros(int(te.sum()))
+            for sd in range(seed, seed + n_seeds):
+                m = HistGradientBoostingClassifier(
+                    max_iter=300, early_stopping=False, random_state=sd)
+                m.fit(Xtr, y[tr])
+                p += m.predict_proba(Xte)[:, 1]
+            got[name] = _auc(y[te], p / n_seeds)
         rep["cross_band"][b] = {"n_test": int(te.sum()),
                                 "base_rate": float(y[te].mean()), **got}
         say(f"    held out {b:3s} stamp={got['stamp']:.4f} all={got['all']:.4f}")
@@ -421,20 +481,24 @@ def validate(df, *, n_splits=5, seed=0, exclude_mk=True,
         f"{rep['n_beams_monotonicity']['monotone']}")
 
     # --- what morphology actually says RFI ---------------------------------
-    say("  permutation importance...")
+    # Single seed: this is a ranking, not a headline number, and permuting
+    # 12 columns x 5 repeats x n_seeds would triple the run for no change
+    # in the order. Recorded in the report as importance_n_seeds.
+    say("  permutation importance (single seed)...")
     cols = feature_columns("stamp")
     ei = np.flatnonzero(ev)
     tr, te = next(GroupKFold(n_splits).split(
         ei, y, df["group_id"].to_numpy()[ev]))
     m = HistGradientBoostingClassifier(max_iter=300, early_stopping=False,
                                        random_state=seed)
-    m.fit(df.iloc[ei[tr]][cols].to_numpy(np.float32), y[tr])
+    m.fit(df.iloc[ei[tr]][cols].to_numpy(FEATURE_DTYPE), y[tr])
     rng = np.random.default_rng(seed)
     pick = te if len(te) <= importance_sample else rng.choice(
         te, importance_sample, replace=False)
-    r = permutation_importance(m, df.iloc[ei[pick]][cols].to_numpy(np.float32),
+    r = permutation_importance(m, df.iloc[ei[pick]][cols].to_numpy(FEATURE_DTYPE),
                                y[pick], n_repeats=5, random_state=seed,
                                scoring="roc_auc", n_jobs=-1)
+    rep["importance_n_seeds"] = 1
     rep["importance"] = sorted(
         [{"column": c, "mean": float(a), "std": float(sd_)}
          for c, a, sd_ in zip(cols, r.importances_mean, r.importances_std)],
@@ -540,12 +604,15 @@ def main():
     p.add_argument(
         "--features", default="stamp", choices=sorted(FEATURE_SETS),
         help="which columns the model may see. 'stamp' (default) is the 12 "
-             "morphology features computed from the stamp pixels -- it costs "
-             "0.0004 AUC against 'all' and cannot relearn the RFI frequency "
-             "mask, so it is not circular with Track A's own band cut. 'all' "
-             "adds frequency, |drift|, SNR and channel offset. 'meta' is those "
-             "four alone and 'flags' is Track A's six hand-built flags; both "
-             "exist as baselines, not as things to ship")
+             "morphology features computed from the stamp pixels. It is NOT "
+             "the most accurate: 'all' scores 0.9911 against its 0.9899. It is "
+             "the default because it cannot relearn the RFI frequency mask, so "
+             "'morphology beats the classical filter' is not partly circular "
+             "with that filter's own first cut -- and because the score is "
+             "applied to Track A survivors, which sit outside that mask by "
+             "construction. 'all' adds frequency, |drift|, SNR and channel "
+             "offset. 'meta' is those four alone and 'flags' is Track A's six "
+             "hand-built flags; both exist as baselines, not as things to ship")
     p.add_argument(
         "--folds", type=int, default=5, metavar="K",
         help="group-CV folds, split on obsid (default 5). Cross-validation is "
@@ -554,7 +621,17 @@ def main():
              "the K fold models, so no hit is ever scored by a model that saw "
              "its observation")
     p.add_argument("--seed", type=int, default=0,
-                   help="RNG seed for the model (default 0)")
+                   help="first RNG seed (default 0); --seeds N uses "
+                        "seed..seed+N-1")
+    p.add_argument(
+        "--seeds", type=int, default=3, metavar="N",
+        help="average the score over N seeds (default 3). Not a refinement: "
+             "HistGradientBoosting picks its 256 bin edges from a random "
+             "200,000-row subsample, so one seed's per-hit verdict is "
+             "substantially churn -- across seeds 0-2 the ROC-AUC is stable to "
+             "+/-0.00004 but the contrarian count swings 2,972-3,368. "
+             "Averaging three costs 3x27 s, raises AUC to 0.9899 and halves "
+             "the contrarian set. --seeds 1 reproduces single-seed behaviour")
     p.add_argument(
         "--max-iter", type=int, default=300, metavar="N",
         help="boosting iterations per fold (default 300). Below ~100 the "
@@ -609,11 +686,13 @@ def main():
           f"{df.weak_label.eq(0).sum():,} confined), "
           f"{int((df.weak_label < 0).sum()):,} ambiguous")
 
-    print(f"\nfitting {args.folds} folds on '{args.features}' "
-          f"({len(feature_columns(args.features))} features)...")
+    print(f"\nfitting {args.folds} folds x {args.seeds} seed(s) on "
+          f"'{args.features}' ({len(feature_columns(args.features))} features, "
+          f"{np.dtype(FEATURE_DTYPE).name})...")
     score, fold, info = fit_score(
         df, features=args.features, n_splits=args.folds, seed=args.seed,
-        exclude_mk=not args.include_mk, max_iter=args.max_iter)
+        n_seeds=args.seeds, exclude_mk=not args.include_mk,
+        max_iter=args.max_iter)
     print(f"  scored {len(df):,} hits in {time.time() - t0:.0f}s")
     print(f"  out-of-fold: {info['n_scored_out_of_fold']:,}   "
           f"fold-mean: {info['n_scored_by_fold_mean']:,}")
@@ -661,6 +740,7 @@ def main():
     if not args.no_report:
         print("\nvalidating...")
         rep["validation"] = validate(df, n_splits=args.folds, seed=args.seed,
+                                     n_seeds=args.seeds,
                                      exclude_mk=not args.include_mk)
     rp = os.path.join(out, f"{tag}report.json")
     with open(rp, "w") as fh:

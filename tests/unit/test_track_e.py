@@ -148,3 +148,66 @@ def test_too_few_groups_raises_rather_than_silently_reducing_folds():
     df = fixtures.synthetic_weak_labelled(n=600, groups=3, seed=0)
     with pytest.raises(ValueError, match="fewer than n_splits"):
         E.fit_score(df, features="all", n_splits=5)
+
+
+def test_the_feature_matrix_is_float64():
+    """
+    Every feature column in the parquet is float64, and every other science
+    path in this package asks for float64 explicitly. This one used to narrow
+    to float32 -- the only place in the repo that did.
+
+    Narrowing is not catastrophic here (HistGradientBoosting bins to 256 levels
+    and upcasts internally, so the AUC moved by 4e-4), but it perturbs which
+    side of a bin edge a value falls on, and the per-hit verdicts move with it:
+    the contrarian count went 2,972 -> 3,303 on the real data. Pinned so the
+    matrix cannot quietly narrow again.
+    """
+    import numpy as np
+
+    assert np.dtype(E.FEATURE_DTYPE) == np.float64
+    df = fixtures.synthetic_weak_labelled(n=1200, groups=6, seed=0)
+    X = df[E.feature_columns("all")].to_numpy(E.FEATURE_DTYPE)
+    assert X.dtype == np.float64
+
+
+def test_the_score_is_averaged_over_seeds_by_default():
+    """
+    Not a refinement. HistGradientBoosting draws its 256 bin edges from a random
+    200,000-row subsample, so a single seed's per-hit verdict is substantially
+    churn -- measured on the real data, two seeds share only 93% of the
+    shortlist, while f32-vs-f64 at one seed shares 95%. The seed perturbs the
+    model MORE than the dtype does.
+
+    Averaging must not weaken the no-leak property: every seed uses the same
+    GroupKFold split, so a row's score stays the mean of models that never saw
+    its observation.
+    """
+    import numpy as np
+
+    df = fixtures.synthetic_weak_labelled(n=3000, groups=9, seed=0)
+    one, f1, i1 = E.fit_score(df, features="all", n_splits=3, n_seeds=1)
+    three, f3, i3 = E.fit_score(df, features="all", n_splits=3, n_seeds=3)
+
+    assert i1["n_seeds"] == 1 and i1["seeds"] == [0]
+    assert i3["n_seeds"] == 3 and i3["seeds"] == [0, 1, 2]
+    assert i3["dtype"] == "float64"
+    assert np.array_equal(f1, f3), "averaging must not change the fold split"
+    assert not np.array_equal(one, three), "averaging did nothing"
+    assert np.isfinite(three).all() and ((three >= 0) & (three <= 1)).all()
+
+
+def test_seed_averaging_is_the_mean_of_the_single_seed_runs():
+    """The arithmetic, pinned: a three-seed score is the mean of seeds 0, 1, 2."""
+    import numpy as np
+
+    df = fixtures.synthetic_weak_labelled(n=2000, groups=8, seed=5)
+    parts = [E.fit_score(df, features="all", n_splits=4, seed=s, n_seeds=1)[0]
+             for s in (0, 1, 2)]
+    avg, _, _ = E.fit_score(df, features="all", n_splits=4, seed=0, n_seeds=3)
+    assert np.allclose(avg, np.mean(parts, axis=0))
+
+
+def test_n_seeds_below_one_raises():
+    df = fixtures.synthetic_weak_labelled(n=600, groups=6, seed=0)
+    with pytest.raises(ValueError, match="at least 1"):
+        E.fit_score(df, features="all", n_splits=3, n_seeds=0)

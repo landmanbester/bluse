@@ -42,7 +42,7 @@ def test_stamp_morphology_beats_track_a_s_entire_flag_set():
     """
     The headline. Twelve numbers computed from the stamp pixels against the six
     hand-built flags of the classical filter, on the same rows and the same
-    folds. Measured 0.9887 against 0.9373.
+    folds. Measured 0.9899 against 0.9373 (float64, three seeds).
     """
     a = _report()["ablation"]
     assert a["stamp"]["roc_auc"] >= 0.985
@@ -53,7 +53,7 @@ def test_the_result_is_not_the_zero_drift_freebie():
     """
     x01_drift_residual is NaN exactly where drift is zero, and P(RFI | NaN) is
     0.996 -- a 29.6% slice of the data that is nearly free. Drop every
-    zero-drift row and the result must survive. Measured 0.9903, i.e. it rises.
+    zero-drift row and the result must survive. Measured 0.9927, i.e. it rises.
     """
     r = _report()["nonzero_drift"]
     assert r["stamp"] >= 0.985
@@ -64,7 +64,7 @@ def test_the_result_is_not_a_brightness_meter():
     """
     A signal must be bright to be DETECTED in 32 beams, so the label is partly
     a selection effect on SNR. Within an SNR decile it cannot be. Measured
-    0.8956 n-weighted across deciles, against 0.9887 overall -- brightness
+    0.8934 n-weighted across deciles, against 0.9899 overall -- brightness
     contributes and does not carry it.
     """
     assert _report()["snr_stratified"]["weighted"] >= 0.85
@@ -73,8 +73,8 @@ def test_the_result_is_not_a_brightness_meter():
 def test_the_result_is_not_duplicate_inflation():
     """
     One emitter yields up to 64 near-duplicate rows, one per beam, which could
-    inflate every row-wise metric. Collapse to one row per signal: 0.9890.
-    Restrict to signals appearing exactly once: 0.9822.
+    inflate every row-wise metric. Collapse to one row per signal: 0.9894.
+    Restrict to signals appearing exactly once: 0.9835.
     """
     r = _report()["signal_level"]
     assert r["median_per_signal"] >= 0.98
@@ -86,7 +86,7 @@ def test_it_generalises_to_a_band_it_never_saw():
     """
     Hold out a whole band and train on the other two. This is the difference
     between general RFI morphology and a memorised catalogue of band-specific
-    emitters. Measured 0.90-0.99 on all three.
+    emitters. Measured L 0.9911, UHF 0.8976, S 0.8962.
     """
     for band, r in _report()["cross_band"].items():
         assert r["stamp"] >= 0.85, f"{band} failed to transfer"
@@ -129,3 +129,34 @@ def test_the_prefiltered_file_is_flagged_as_out_of_distribution():
     assert r["n_positive"] == 0
     assert r["frac_scored_rfi"] > 0.5
     assert r["auc_including_it"] < _report()["ablation"]["stamp"]["roc_auc"]
+
+
+def test_the_shipped_configuration_is_float64_and_seed_averaged():
+    """
+    Both were measured, not assumed (docs/track-e-2026-09.md #9).
+
+    float32 moved the headline by only 4e-4 but moved 11,622 per-hit scores by
+    more than 0.1, because HistGradientBoosting bins to 256 levels and rounding
+    only changes which side of a bin edge a value lands on. The seed does the
+    same thing and does MORE of it -- the bin edges come from a random
+    200,000-row subsample, so two seeds share 93% of the shortlist where two
+    dtypes share 95%.
+
+    Averaging three seeds is therefore not polish: it halved the contrarian set
+    (3,303 -> 1,515), roughly half of which was one seed's bin edges.
+    """
+    r = _report()
+    assert r["dtype"] == "float64"
+    assert r["n_seeds"] >= 3
+
+
+def test_the_boolean_flag_baseline_is_the_control():
+    """
+    Six boolean columns have two distinct values each, so no bin edge can move
+    under them -- and the flags AUC reads 0.9373 under every configuration
+    tested, both dtypes and any seed count, to four decimal places.
+
+    That is what makes the rest of #9 a statement about bin placement rather
+    than about the data, so it is worth a test of its own.
+    """
+    assert abs(_report()["ablation"]["flags"]["roc_auc"] - 0.9373) < 5e-5

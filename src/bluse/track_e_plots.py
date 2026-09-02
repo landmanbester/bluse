@@ -127,19 +127,28 @@ def fig_monotonicity(rep, path):
 
 # --- what the information is worth -----------------------------------------
 
-_ABL = [("flags", "Track A flags\n(6 hand-built)"),
-        ("meta", "metadata\n(4 features)"),
-        ("all", "metadata + stamp\n(16 features)"),
-        ("stamp", "stamp morphology\n(12 features)")]
+_ABL = {"flags": "Track A flags\n(6 hand-built)",
+        "meta": "metadata\n(4 features)",
+        "all": "metadata + stamp\n(16 features)",
+        "stamp": "stamp morphology\n(12 features)"}
+DEFAULT_SET = "stamp"
 
 
 def fig_ablation(rep, path):
+    """
+    Ordered by score, with the SHIPPED DEFAULT emphasised -- which is not the
+    highest. all-16 scores 0.9911 against stamp's 0.9899, and stamp is the
+    default anyway because it cannot relearn the RFI frequency mask. Sorting by
+    value keeps the chart honest about the ordering; the annotation keeps it
+    honest about which one we run.
+    """
     plt = _rc()
     a = rep["validation"]["ablation"]
-    labels = [lab for k, lab in _ABL]
-    vals = [a[k]["roc_auc"] for k, _ in _ABL]
+    order = sorted(_ABL, key=lambda k: a[k]["roc_auc"])
+    labels = [_ABL[k] for k in order]
+    vals = [a[k]["roc_auc"] for k in order]
     y = np.arange(len(vals))
-    hero = len(vals) - 1                       # stamp: the one that matters
+    hero = order.index(DEFAULT_SET)
 
     fig, ax = plt.subplots(figsize=(7.6, 3.5))
     _clean(ax, grid="x")
@@ -157,7 +166,12 @@ def fig_ablation(rep, path):
     ax.set_ylim(-0.6, len(vals) - 0.4)
     ax.set_xlim(0.90, 1.008)
     ax.set_xticks([0.90, 0.92, 0.94, 0.96, 0.98, 1.00])
-    ax.set_xlabel("ROC-AUC, group 5-fold on obsid   →")
+    # Left-anchored in the empty band below the highlighted row. Centring it on
+    # the dot puts it straight through the next row's value label.
+    ax.text(0.9015, hero - 0.42,
+            "the shipped default — it cannot relearn the RFI frequency mask",
+            ha="left", va="top", fontsize=9, color=MUTED)
+    ax.set_xlabel("ROC-AUC, group 5-fold on obsid, mean of 3 seeds   →")
     ax.set_title("Stamp morphology against the classical filter's own flags")
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")

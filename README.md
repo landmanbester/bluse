@@ -544,8 +544,9 @@ were re-delivered repaired on 2026-09-02, so the "clean file" item is closed.)*
 ## Track E — the RFI score
 
 ```bash
-bluse-score                      # ~4 min: fit, score 2M hits, catalogues, report, figures
-bluse-score --no-report          # ~40 s: scores only
+bluse-score                      # ~9 min: fit, score 2M hits, catalogues, report, figures
+bluse-score --no-report          # ~80 s: scores only
+bluse-score --seeds 1            # single seed, ~30 s (see the caveat below)
 bluse-score --features all       # 16 features instead of the 12 stamp columns
 bluse-score-plots                # redraw the figures without refitting
 ```
@@ -560,7 +561,8 @@ Group 5-fold on `obsid`, 1,599,299 labelled hits, 444 observations:
 
 | | ROC-AUC |
 |---|---:|
-| **12 stamp-morphology features** | **0.9887** |
+| metadata + stamp (16) | 0.9911 |
+| **12 stamp-morphology features** — the default | **0.9899** |
 | Track A's entire flag set | 0.9373 |
 
 Trained only on ≤2 and ≥32 beams, the score orders the untrained 3–31 range
@@ -569,19 +571,25 @@ dropping the zero-drift rows, SNR stratification, collapsing beam duplicates,
 and holding out a whole band. Full method, every de-confounding check, and what
 would falsify it: [`docs/track-e-2026-09.md`](docs/track-e-2026-09.md).
 
+The matrix is float64 and the score is averaged over three seeds. Neither is
+decoration — `HistGradientBoosting` draws its 256 bin edges from a random
+200,000-row subsample, so a single seed's per-hit verdict is substantially
+churn: the `contrarian` count alone swings 2,972–3,368 on the seed. §9 of that
+document has the measurement, and the control that pins the mechanism.
+
 **Output** in `scores/`, with figures in `plots/`:
 
 | file | what it is |
 |---|---|
-| `candidates.csv` | every Track A survivor, ranked. **3,003 of 4,565 (66%) look exactly like multi-beam RFI** |
-| `contrarian.csv` | 3,303 hits in ≥32 beams that score clean — filter and morphology disagreeing |
+| `candidates.csv` | every Track A survivor, ranked. **2,988 of 4,565 (65.5%) look exactly like multi-beam RFI** |
+| `contrarian.csv` | 1,515 hits in ≥32 beams that score clean — filter and morphology disagreeing |
 | `ambiguous.csv` | 411,898 hits in 3–31 beams, where the filter abstains |
 | `all_scores.parquet` | `rfi_score` on all 2,014,055 hits |
 
 **A high score is strong evidence of RFI. A low score is not evidence of a
 technosignature** — the labels are positive-unlabelled, and the 524-hit
-shortlist collapses to about 49 frequency groups whose stamps show two
-*instrumental* populations. See
+shortlist collapses to 48 frequency groups whose stamps show two *instrumental*
+populations. See
 [`NOMENCLATURE.md`](NOMENCLATURE.md#rfi-score) before quoting any of it.
 
 ## Licence

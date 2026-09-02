@@ -290,6 +290,7 @@ def build(rep, plots_dir):
           <span class="pill">{info['n_train']:,} labelled hits</span>
           <span class="pill">{info['n_groups']} observations</span>
           <span class="pill">group {info['n_splits']}-fold on obsid</span>
+          <span class="pill">float64 &middot; {info['n_seeds']} seeds</span>
         </div>
       </div>
       <div class="col grow"><div class="plate">
@@ -324,7 +325,8 @@ def build(rep, plots_dir):
         "<b>Say:</b> a 0.99 AUC has several boring explanations &mdash; "
         "brightness, duplicate rows, the zero-drift shortcut. Each row is one "
         "of them, closed.",
-        f"stamp morphology, {len(info['columns'])} features &middot; "
+        f"stamp morphology, {len(info['columns'])} features, float64, "
+        f"mean of {info['n_seeds']} seeds &middot; "
         f"baseline {a['stamp']['roc_auc']:.4f}")
 
     s3 = _slide(
@@ -378,7 +380,7 @@ def build(rep, plots_dir):
         clean</em>. A high score is strong evidence of RFI. A low score is
         <strong>not</strong> evidence of a technosignature.</p></div>
         <p>Those {ver.get('shortlist', 0)} hits collapse to
-        <strong>49 distinct (file, 0.1&nbsp;MHz) groups</strong>, the top ten
+        <strong>48 distinct (file, 0.1&nbsp;MHz) groups</strong>, the top ten
         holding 73&#37;. Their stamps show two morphological populations,
         <strong>neither astrophysical</strong>: an instrumental signature
         around 867.8&nbsp;MHz, and blocky intermittent structure at
@@ -387,13 +389,13 @@ def build(rep, plots_dir):
           <th class="num">hits</th><th class="num">obs</th></tr></thead>
         <tbody>
           <tr class="hero"><td>uhf_long</td><td class="num">678.0</td>
-            <td class="num">155</td><td class="num">6</td></tr>
+            <td class="num">157</td><td class="num">6</td></tr>
           <tr><td>lband_long</td><td class="num">960.0</td>
             <td class="num">73</td><td class="num">1</td></tr>
           <tr><td>lband_short</td><td class="num">867.8</td>
             <td class="num">51</td><td class="num">3</td></tr>
           <tr><td>uhf_short</td><td class="num">576.0</td>
-            <td class="num">21</td><td class="num">2</td></tr>
+            <td class="num">22</td><td class="num">3</td></tr>
         </tbody></table>
       </div>
       <div class="col grow"><div class="plate">
@@ -417,7 +419,7 @@ def build(rep, plots_dir):
         f"""<div class="body"><div class="three">
       <div class="col"><h3>use &mdash; today</h3>
         <p><strong class="mono">bluse-score</strong> scores all {hits:,} hits
-        in 40&nbsp;s, four minutes with the full validation report. No
+        in 80&nbsp;s, nine minutes with the full validation report. No
         dependency outside scikit-learn.</p>
         <p>The pruned list is a two-thirds cut in vetting load with a per-hit
         reason. The <span class="mono">ambiguous</span> table gives a verdict

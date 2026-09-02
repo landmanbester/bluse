@@ -19,6 +19,7 @@ def _report(auc=0.9887, pruned=3003):
     """The shape validate() + the CLI produce, with the fields the deck reads."""
     return {
         "info": {"features": "stamp", "columns": ["a"] * 12, "n_splits": 5,
+                 "n_seeds": 3, "seeds": [0, 1, 2], "dtype": "float64",
                  "n_train": 1_599_299, "n_groups": 444},
         "counts": {"candidates": 4565, "contrarian": 3303, "ambiguous": 411_898},
         "verdicts": {"pruned": pruned, "uncertain": 1038, "shortlist": 524},

@@ -145,7 +145,7 @@ from the spatial filter and computed without ever seeing a beam count.
 Precisely: it is the model's estimate of **P(this hit was detected in ≥32
 beams | its 12 stamp-morphology features)**. The spatial filter's verdicts are
 free labels — ≥32 beams is interference, ≤2 beams is confined — so a classifier
-can learn to reproduce them from the stamp alone. It reaches **0.9887 ROC-AUC**
+can learn to reproduce them from the stamp alone. It reaches **0.9899 ROC-AUC**
 where Track A's entire hand-built flag set reaches 0.9373.
 
 The reason to want it when `n_beams` is already in the catalogue: **the spatial
@@ -163,7 +163,7 @@ signals independently known to be terrestrial — while a low score says only
 that the hit does not resemble this survey's multi-beam RFI.
 
 **A low score is not a candidate.** Measured, on the 524 hits the shortlist
-actually contains: they collapse to about **49 distinct (file, 0.1 MHz)
+actually contains: they collapse to **48 distinct (file, 0.1 MHz)
 groups, the top ten holding 73%**. The shortlist is a handful of persistent
 narrow emitters seen many times over, not 524 independent oddities — and
 looking at their stamps shows two morphological populations, neither of them
@@ -183,11 +183,11 @@ are artefacts. Re-check before applying the score to new data — and do not use
 
 What `bluse-score` calls each **Track A survivor**, by where its score falls:
 
-- **pruned** — score > 0.9. On the survey: **3,003 of 4,565 (66%)**. Hits the
+- **pruned** — score > 0.9. On the survey: **2,988 of 4,565 (65.5%)**. Hits the
   classical filter passed that look exactly like multi-beam RFI. The
   actionable output: two thirds of the vetting list, removed with a reason.
-- **uncertain** — 1,038 (23%). No verdict either way.
-- **shortlist** — score < 0.1. 524 (11%). Read the caveat above before
+- **uncertain** — 1,053 (23.1%). No verdict either way.
+- **shortlist** — score < 0.1. 524 (11.5%). Read the caveat above before
   quoting this number.
 
 The thresholds are conventions, not detection criteria; `--shortlist-below`

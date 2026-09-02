@@ -589,25 +589,33 @@ Group 5-fold on `obsid`, 1,599,299 labelled hits, 444 observations:
 
 | feature set | ROC-AUC |
 |---|---:|
-| **12 stamp-morphology columns** | **0.9887** |
-| all 16 features | 0.9884 |
-| metadata only (4) | 0.9839 |
+| all 16 features | 0.9911 |
+| **12 stamp-morphology columns** — the default | **0.9899** |
+| metadata only (4) | 0.9845 |
 | Track A's entire flag set | 0.9373 |
+
+The default is the 12-column model even though the 16-column one scores higher:
+it cannot relearn the RFI frequency mask, so "morphology beats the classical
+filter's own flags" is not partly circular with that filter's first cut.
 
 Trained only on ≤2 and ≥32 beams, the score orders the untrained 3–31 range
 monotonically across every bin — 422,480 hits, none of them in any training
-fold. It survives dropping the zero-drift rows (0.9903), SNR stratification
-(0.8956), collapsing beam duplicates (0.9822 on singletons) and holding out a
+fold. It survives dropping the zero-drift rows (0.9927), SNR stratification
+(0.8934), collapsing beam duplicates (0.9835 on singletons) and holding out a
 whole band (0.90–0.99).
+
+float64 throughout, and the score averaged over three seeds — the bin edges
+come from a random 200,000-row subsample, so a single seed's per-hit verdict is
+substantially churn. See `../docs/track-e-2026-09.md` §9.
 
 ### What it produced
 
 | | |
 |---|---|
 | Track A survivors | 4,565 |
-| **called RFI by morphology** (>0.9) | **3,003 — 66%** |
-| uncertain | 1,038 — 23% |
-| shortlist (<0.1) | 524 — 11% |
+| **called RFI by morphology** (>0.9) | **2,988 — 65.5%** |
+| uncertain | 1,053 — 23.1% |
+| shortlist (<0.1) | 524 — 11.5% |
 
 Two thirds of the vetting list removed with a per-hit reason.
 
@@ -615,15 +623,16 @@ Two thirds of the vetting list removed with a per-hit reason.
 
 1. **A low score is not a candidate.** The labels are positive-unlabelled:
    `weak_label == 0` means ≤2 beams, not verified clean.
-2. **The 524-hit shortlist is about 10 emitters.** It collapses to ~49
+2. **The 524-hit shortlist is about 10 emitters.** It collapses to 48
    distinct (file, 0.1 MHz) groups, the top ten holding 73%. Their stamps show
    two morphological populations, neither astrophysical: `lband_short` around
    867.8 MHz with bright first/last time rows in every hit, and `uhf_long` at
    599–678 MHz with blocky intermittent structure. That is an outlier ranking
    working, not a detection list.
-3. **`x01_drift_residual` dominates** permutation importance (0.133; next is
-   0.052), independently confirming the mutual-information ranking in
-   `../docs/TODO.md` P1-4.
+3. **`x01_drift_residual` dominates** permutation importance (0.121; next is
+   0.059) despite being *weaker alone* than `f04` (0.938 against 0.967), so it
+   carries something the other eleven do not. Independently confirms the
+   mutual-information ranking in `../docs/TODO.md` P1-4.
 
 ## Next
 

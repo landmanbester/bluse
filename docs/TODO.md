@@ -330,8 +330,8 @@ no improvement).
 
 - ~~**Track E** — weak-supervision classifier~~ — **DONE 2026-09-03.** Result
   in [`track-e-2026-09.md`](track-e-2026-09.md). Stamp morphology predicts the
-  spatial filter's verdict at 0.9887 ROC-AUC against Track A's whole flag set
-  at 0.9373, survives every de-confounding check, and prunes 66% of the
+  spatial filter's verdict at 0.9899 ROC-AUC against Track A's whole flag set
+  at 0.9373, survives every de-confounding check, and prunes 65.5% of the
   survivor list. `bluse-score`.
 
   **New questions it raised, in priority order:**
@@ -340,13 +340,16 @@ no improvement).
      injection harness would give a real objective function and settle whether
      the monotonicity is physics or an SNR gradient. This was already P2 §6;
      it is now the highest-value item in the repository.
-  2. **The `contrarian` set** — 3,303 hits in ≥32 beams that score clean.
-     Instrumental, or the model's blind spot? Nobody has looked.
+  2. **The `contrarian` set** — 1,515 hits in ≥32 beams that score clean.
+     Instrumental, or the model's blind spot? Nobody has looked. (It was 3,303
+     before seed-averaging; roughly half of it was churn — see
+     [`track-e-2026-09.md`](track-e-2026-09.md) §9.)
   3. **The shortlist's two artefact populations** — `lband_short` ~867.8 MHz
      (bright first/last time rows) and `uhf_long` 599–678 MHz (blocky,
      intermittent). Both are new; neither is in any RFI table we hold.
-  4. **`f04`/`f06` are individually near-sufficient** (0.9636 / 0.9531 alone)
-     but add ~0.007 each given the rest. That is the P2 redundancy panel's
+  4. **`f04`/`f06` are individually near-sufficient** (0.9667 / 0.9590 alone)
+     but add ~0.014 each given the rest, while `x01` is *weaker* alone (0.9380)
+     and by far the largest marginal contributor. That is the P2 redundancy panel's
      acceptance case arriving from a second direction.
   5. **Feed the score into Track A as a cut?** Needs an operating point, which
      needs item 1.
