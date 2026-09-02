@@ -122,6 +122,10 @@ def feature_matrix(df, columns=None, drop_saturated=True, scaling="robust"):
                   SNR tail dominate.
       "quantile"  rank-transform every feature to a uniform distribution. The
                   most aggressive equaliser; discards magnitude entirely.
+      "robust-equalised"
+                  robust, then per-column weights that equalise each column's
+                  contribution to the distance -- winsorised standardisation.
+                  See diagnostics.equalising_weights.
       "none"      GLOBULAR's literal spec. Kept so the difference is
                   reproducible, not because it works well here.
     """
@@ -133,18 +137,27 @@ def feature_matrix(df, columns=None, drop_saturated=True, scaling="robust"):
     X = np.array(df[columns].to_numpy(dtype=np.float64), copy=True)
     good = np.isfinite(X).all(axis=1)
 
-    if scaling == "robust":
-        sub = X[good]
-        med = np.median(sub, axis=0)
-        q75, q25 = np.percentile(sub, [75, 25], axis=0)
-        iqr = np.where((q75 - q25) > 1e-12, q75 - q25, 1.0)
-        X = np.clip((X - med) / iqr, -5, 5)
-    elif scaling == "quantile":
-        from sklearn.preprocessing import QuantileTransformer
-        qt = QuantileTransformer(output_distribution="uniform",
-                                 n_quantiles=min(1000, int(good.sum())),
-                                 subsample=200_000, random_state=0)
-        X[good] = qt.fit_transform(X[good])
+    # DELEGATE. This function used to carry its own copy of the scaling logic,
+    # with branches for "robust" and "quantile" only, so any other mode fell
+    # through and returned X untouched -- `--scaling robust-equalised` silently
+    # clustered the RAW matrix while the metrics JSON, which computes weights
+    # separately, reported equalising weights. The record disagreed with the
+    # matrix actually clustered.
+    #
+    # The duplicate was the fault, not the missing branch. diagnostics.scale
+    # says it is "the single shared implementation ... so the two paths cannot
+    # drift", and that was false here. Delegating makes it true, so a mode
+    # added there cannot be missed here.
+    #
+    # Fit on the finite rows and transform only those: the non-finite rows are
+    # dropped by every caller via `good`, and passing them through a scaler is
+    # how NaN reached NearestNeighbors once already.
+    if scaling != "none":
+        stats = (diagnostics.robust_stats(X[good])
+                 if scaling.startswith("robust") else None)
+        kinds = {c + "_n": k for c, k in F.column_kinds().items()}
+        X[good] = diagnostics.scale(X[good], scaling, stats,
+                                    kinds=kinds, columns=columns)
     return X, columns, good
 
 
