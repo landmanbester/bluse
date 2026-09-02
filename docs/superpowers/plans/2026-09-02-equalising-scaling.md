@@ -30,7 +30,13 @@ constraints in its §2 are measured findings, not preferences.
 - **Seeds 0–2** for every stability number, family ARI restricted to jointly
   clustered points (`metrics.stability(...)["ari_restricted"]`).
 - **Baseline to beat:** `leaf`/`robust` on sband_short — famARI 0.4888 at 36
-  families, narrow 0.194%, median span 265.0 MHz.
+  families, median span 265.0 MHz.
+- **Rank on family ARI, then median family span. Do NOT rank on
+  `narrow_frac`.** At 36 families it reads 0.194% against 0.168%, which on
+  34,933 clustered hits is 68 hits against 59 — a nine-hit difference that
+  cannot carry a decision. Report it; never rank on it. Spec §6.1 says why.
+- **`matching.match(..., n_families=)` exists** — it landed in P0-1 (`84e42ff`)
+  along with `--match-families`. Confirmed on this branch; no need to add it.
 - Run everything with `uv run`. Experiment scripts are throwaway and live in the
   scratchpad; only their *conclusions* are committed, to `docs/`.
 
@@ -46,9 +52,22 @@ constraints in its §2 are measured findings, not preferences.
 - Consumes: `_shares`, `_shares_knn`, `scale` (existing).
 - Produces: `equalising_weights(Z, *, kinds=None, columns=None,
   strategy="closed", iters=0, damping=0.5, cap=None, min_samples=8,
-  knn_sample=20_000, seed=0) -> (np.ndarray, dict)`. `info` keys:
-  `strategy`, `iters`, `skipped` (list of column names), `max_dev_global`,
-  `max_dev_knn`, `weight_min`, `weight_max`.
+  knn_sample=20_000, seed=0, with_info=True) -> (np.ndarray, dict)`. `info`
+  keys: `strategy`, `iters`, `skipped` (list of column names),
+  `max_dev_global`, `max_dev_knn`, `dev_trace` (per-iteration k-NN deviation),
+  `weight_min`, `weight_max`, `spread_warning`.
+
+**`with_info=False` is not optional polish.** The `info` block calls
+`_shares_knn`, which costs **1,311 ms** on sband_short at `knn_sample=20_000`
+(measured; 435 ms at 5,000) against 1.7 ms for the weights themselves.
+`scale()` is called in `cluster()` per run, in `audit()` per rail render, and
+once per seed in `/stability`, so leaving it on would make the mode advertised
+as free cost ~1.3 s everywhere — and the Task 5 cache would hide it in the
+Bench only. `scale()` passes `with_info=False`; only `--report`, the rail and
+the Task 2 experiment ask for `info`.
+
+Keep `knn_sample=20_000`, which is `audit()`'s default since P0-3. (A review
+suggested 5,000 "matching `audit()`"; that was `audit()`'s pre-P0-3 default.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -103,6 +122,23 @@ def test_iterative_strategy_respects_its_cap():
     w, _ = D.equalising_weights(Z, strategy="knn", iters=4, cap=2.0)
     assert w.max() <= 2.0 + 1e-9
     assert w.min() >= 1 / 2.0 - 1e-9
+
+
+def test_extreme_weight_spread_is_flagged():
+    """
+    The sd > 1e-12 floor only catches exactly-constant columns. A column with
+    sigma = 0.01 draws weight ~100 and passes silently, and the failure then
+    presents as "clustering got worse after I added a feature", which is close
+    to undiagnosable. 2.0 is the measured scale to reason from: it is where eom
+    breaks.
+    """
+    from bluse import diagnostics as D
+    rng = np.random.default_rng(0)
+    Z = np.column_stack([rng.normal(0, 1, 2000), rng.normal(0, 1, 2000),
+                         rng.normal(0, 0.01, 2000)])
+    w, info = D.equalising_weights(Z, strategy="closed")
+    assert info["spread_warning"]
+    assert w.max() <= D.EQUALISE_MAX_WEIGHT
 
 
 def test_degenerate_columns_do_not_produce_infinite_weights():
@@ -183,7 +219,19 @@ def equalising_weights(Z, *, kinds=None, columns=None, strategy="closed",
 
 
 def _normalise(w, frozen, cap):
-    """Mean-1 over the free columns, cap, and pin the frozen ones at 1.0."""
+    """
+    Mean-1 over the free columns, cap, and pin the frozen ones at 1.0.
+
+    NOTE the cap is applied AFTER mean-normalisation and the result is not
+    re-normalised, so a capped weight vector has mean != 1. That is harmless
+    for the percentile matching cut, which is scale-invariant, but
+    derive_cut_quantile and any explicit `cut=` are absolute distances and
+    would shift. Re-normalising would push weights back over the cap, so this
+    is a deliberate choice, not an oversight.
+
+    EQUALISE_MAX_WEIGHT is a hard ceiling applied even when `cap` is None: a
+    column with sigma = 0.01 would otherwise draw weight ~100 unnoticed.
+    """
     w = np.where(np.isfinite(w) & (w > 0), w, 1.0)
     w[frozen] = 1.0
     free = ~frozen
@@ -227,17 +275,59 @@ statistic and the method targeting the promoted one is ill-behaved.
   Candidates: `robust` baseline; `closed`; `knn` with `iters` ∈ {2, 4, 6},
   `damping` 0.5, `cap` ∈ {None, 2.0}; `hybrid` with `iters` ∈ {1, 2}.
 
+  **Plus four diagnostics that are not candidates to ship**, because they price
+  the k-NN target and close the `f02` question the spec's §2.1 leaves open:
+  - `closed` with `f09_temporal_skew` hand-set to its equal *local* share. If
+    this beats plain `closed`, the k-NN target is buying something real and C
+    is the right answer; if not, A wins on the merits rather than on the
+    tie-break.
+  - `closed` with `f02_abs_drift` pinned to weight 1.0. The closed form gives
+    `f02` the **largest weight in the matrix (1.594)** — smallest post-robust
+    σ, because the tie that inflates its IQR is divided out — which is the
+    P0-2 pathology in miniature.
+  - `f02` **dropped from the matrix entirely**. P0-2 tested `f02` *pinned*
+    and P1-4 tested *reworkings*; exclusion has never been tested, and it is
+    the first thing a reader will ask.
+  - one run with a **synthetic boolean column appended**, so the
+    `boolean`/`flag` guard is exercised on the real code path and not only in a
+    unit test. No registered feature is boolean today.
+
 - [ ] **Step 2: Also record, for each candidate**: fit cost on sband_short and
   on lband_short, and the 35k-sample-vs-population weight deviation. The
   measured figures for the undamped k-NN chase are 9.3 s/iteration and 29.5%
   max deviation; for the closed form 1.5 ms and 0.78%. Reproducibility of the
-  *weights* is part of the score, not a footnote.
+  *weights* is part of the score, not a footnote — it is acceptance criterion
+  4b.
+
+- [ ] **Step 2b: Record `max_dev_knn` PER ITERATION, not just its final
+  value.** This distinguishes two different failures that the endpoint alone
+  cannot separate:
+  - if it **falls and plateaus** near 0.33, equal local share is *unattainable*
+    for some column and the target is mis-specified. Candidate B is then
+    ill-posed and should be dropped outright rather than beaten on score, and
+    candidate C — bounded refinement toward an unreachable target — is the
+    honest form of the idea.
+  - if it is **still falling** at eight iterations, the iteration is merely
+    slow and a damped version may reach the target.
+
+  A multiplicative update toward an unreachable target diverges monotonically,
+  which is what weights spreading 0.044–10.347 in *opposite* directions looks
+  like. Four extra numbers, and it turns "B lost" into "B is ill-posed", which
+  is the more durable finding.
 
 - [ ] **Step 3: Pick the winner.** Rank on family ARI at 36 families first,
-  then median family span, then narrow share. **If the closed form is within
-  0.03 famARI of the best, it wins** — determinism, 350× lower cost and
+  then median family span. **Narrow share is reported but NOT ranked on** — at
+  36 families the baseline and equalised readings are 68 hits against 59, and a
+  nine-hit difference is indistinguishable from a coin toss (spec §6.1).
+  **If the closed form is within 0.03 famARI of the best, it wins** — determinism, 350× lower cost and
   sample-stability are worth that margin, and the spec says so in advance so
   the rule cannot be chosen after seeing the numbers.
+
+  *One difference to state in the write-up:* the experiment builds
+  `Z = scale(X, "robust")` over the full matrix, computes `w`, and clusters
+  `Z * w` with `scaling="none"`, whereas production computes `w` inside
+  `scale()` from the rows handed to it. Same answer on the CLI path, different
+  on the Bench path, so the experiment's numbers are the CLI-path numbers.
 
 - [ ] **Step 4: Write it up** in `docs/equalising-scaling-experiment-2026-09.md`
   with the full table, including the candidates that lost. Record the cost and
@@ -290,6 +380,18 @@ def test_equalised_mode_still_reports_clipping():
     audit()'s clip_frac keys on scaling == "robust". The equalised mode has a
     robust base and clips exactly as much, so omitting it would silently
     report 0.0 -- the same false-negative shape as the --scaling none bug.
+
+    A WIDENED GUARD IS NOT ENOUGH, and this is the trap. clip_frac is measured
+    as (|Z| >= CLIP).mean() on whatever scale() returned, and the equalised
+    mode returns base * w. A value sitting exactly on the clip at +/-5 in the
+    base is no longer at +/-5 after weighting. On this very fixture, measured:
+    clip_frac on the base is 0.050, the closed-form weight for column a is
+    0.661, so the clipped rows land at 3.31 and the threshold test misses every
+    one of them -- clip_frac on base * w is 0.000.
+
+    That is WORSE than the bug it replaces: the original reported 0.0 for a
+    mode that does not clip; this would report 0.0 for a mode that does.
+    clip_frac must therefore be computed on the ROBUST BASE, before weights.
     """
     from bluse import diagnostics as D
     rng = np.random.default_rng(0)
@@ -301,6 +403,20 @@ def test_equalised_mode_still_reports_clipping():
     assert "clip" in rows["a"]["flags"]
 
 
+def test_clip_frac_matches_the_unweighted_robust_mode():
+    """The clip is a property of the base transform, so the two modes must
+    report the same fraction on the same data."""
+    from bluse import diagnostics as D
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(4000, 3))
+    X[:200, 0] = 500.0
+    a = {r["col"]: r for r in D.audit(X, list("abc"), scaling="robust")}
+    b = {r["col"]: r for r in
+         D.audit(X, list("abc"), scaling="robust-equalised")}
+    for c in "abc":
+        assert a[c]["clip_frac"] == pytest.approx(b[c]["clip_frac"])
+
+
 def test_unknown_scaling_still_raises():
     from bluse import diagnostics as D
     with pytest.raises(ValueError):
@@ -309,10 +425,21 @@ def test_unknown_scaling_still_raises():
 
 - [ ] **Step 2: Run them and watch them fail.**
 
-- [ ] **Step 3: Implement.** In `scale()`, add the branch before the `robust`
-  return; in `audit()`, change the `clip_frac` guard from
-  `scaling == "robust"` to `scaling.startswith("robust")` and thread
-  `kinds`/`columns` through to `scale`.
+- [ ] **Step 3: Implement.**
+  - In `scale()`, add the `robust-equalised` branch: build the robust base,
+    call `equalising_weights(base, ..., with_info=False)`, return `base * w`.
+  - In `audit()`, **compute `clip_frac` from the robust base, not from the
+    returned matrix.** Widening the guard to `scaling.startswith("robust")` is
+    necessary but NOT sufficient — see the test above. Either compute
+    `base = scale(raw, "robust")` when `scaling.startswith("robust")` and take
+    `clip_frac` from that, or have `scale()` optionally hand back the clip mask
+    so nothing is recomputed. Prefer the second if the extra pass shows up in
+    the rail render; measure before choosing.
+  - Thread `kinds`/`columns` through `audit()` to `scale()`.
+  - **`iqr_scaled` changes meaning** under the equalised mode: it becomes the
+    weighted IQR. That is arguably the more useful number — it is the spread
+    HDBSCAN sees — but the rail must say which it is showing rather than let
+    the column silently change meaning between modes.
 
 - [ ] **Step 4: Run the full suite** — `uv run pytest -q`, 70+ passing.
 
@@ -388,6 +515,8 @@ uv run bluse-cluster --file sband_short --scaling robust-equalised \
 
 - [ ] **Step 3: Show the weight per column in the feature rail**, beside the
   existing `share / knn` figures, and only when the equalised mode is selected.
+  Label the `iqr_scaled` column so it is clear it is the *weighted* IQR in this
+  mode (Task 3 step 3), rather than letting it change meaning silently.
 
 - [ ] **Step 4: Show the `eom` warning** on the results panel when the mode and
   method are combined, using the same wording as the CLI.
@@ -422,7 +551,12 @@ by assertion.
 ```bash
 uv run python aug_2026_workshop/acceptance.py > /tmp/acc.json
 ```
-Criterion 1: famARI ≥0.60 at 36 families, median span ≤120 MHz.
+Criterion 1: famARI ≥0.60 at 36 families, median span ≤120 MHz. Narrow share
+is reported but is **not** a criterion — spec §6.1.
+Criterion 4b: record the Bench-sample vs full-population weight deviation for
+the shipped strategy on `sband_short` and `lband_short`. ≤1% passes; if an
+iterative strategy won at ~29.5%, that number goes in the acceptance record as
+a stated limitation, not a footnote.
 Criterion 6: the `robust` numbers are unmoved — `eom` 72 / 0.776% / 0.5190 and
 `leaf` 2162 / 6.820% / 0.1077.
 
@@ -446,4 +580,8 @@ gh pr create --base main --title "P1-5: contribution-equalising scaling" \
 ```
 
 The PR body must state which strategy won and why, including the candidates
-that lost, and must carry the `leaf`-only constraint prominently.
+that lost, and must carry the `leaf`-only constraint prominently. It must also
+say that family ARI is **granularity-relative** — the same configuration reads
+0.6659 at 36 families and 0.7683 at 16 — so the new number is never to be
+quoted against the 0.5190 from the earlier `eom` work, which was measured at a
+different family count.
