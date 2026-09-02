@@ -47,6 +47,18 @@ SHARE_DISAGREE = 2.5
 # would otherwise draw a weight near 8 unnoticed, and the failure presents as
 # "clustering got worse after I added a feature".
 EQUALISE_MAX_WEIGHT = 5.0
+# The shipped strategy, chosen by measurement in
+# docs/equalising-scaling-experiment-2026-09.md. "closed" is w ∝ 1/sigma --
+# winsorised standardisation. The k-NN strategy scored far higher and was
+# REJECTED: its target is unattainable for any column with a large tie
+# fraction (tied pairs contribute zero to that coordinate and are
+# disproportionately near neighbours), so it drives f02's weight to the
+# ceiling forever, collapses the metric from 15 effective dimensions to 2.2,
+# and is beaten by a hand-built two-column weighting. See that write-up before
+# changing these.
+EQUALISE_STRATEGY = "closed"
+EQUALISE_ITERS = 0
+EQUALISE_CAP = None
 # Ratio of largest to smallest weight above which info["spread_warning"] fires.
 EQUALISE_SPREAD_WARN = 10.0
 

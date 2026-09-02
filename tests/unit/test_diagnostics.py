@@ -264,3 +264,41 @@ def test_with_info_false_skips_the_expensive_diagnostic():
     assert info["weight_max"] == pytest.approx(w.max())
     full = D.equalising_weights(Z, strategy="closed", with_info=True)[1]
     assert "max_dev_knn" in full and "max_dev_global" in full
+
+
+def test_equalising_default_is_the_measured_winner():
+    """
+    Decision pin. The default strategy was chosen by the experiment in
+    docs/equalising-scaling-experiment-2026-09.md.
+
+    The k-NN strategy scored 0.83 family ARI at 36 families against the closed
+    form's 0.51, and was still rejected -- not on score, but because it fails a
+    precondition. Its target is unattainable for a column with a large tie
+    fraction, it concentrates 96% of the squared weight into three of fifteen
+    columns (so it is not "equalising" anything), and a three-line hand-built
+    f02+f01 weighting beats it. If this test fails, read that write-up rather
+    than editing the constant.
+    """
+    from bluse import diagnostics as D
+
+    assert D.EQUALISE_STRATEGY == "closed"
+    assert D.EQUALISE_ITERS == 0
+    assert D.EQUALISE_CAP is None
+
+
+def test_the_shipped_strategy_actually_equalises():
+    """
+    The property the k-NN strategy failed. A mode named contribution-equalising
+    must not concentrate the contribution: measured on sband_short the closed
+    form keeps 10.77 of 15 effective dimensions where the k-NN fit collapsed to
+    2.22.
+    """
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    Z = rng.normal(size=(4000, 6)) * np.array([1.0, 5.0, 0.2, 2.0, 0.5, 3.0])
+    w, _ = D.equalising_weights(Z, strategy=D.EQUALISE_STRATEGY,
+                                iters=D.EQUALISE_ITERS, cap=D.EQUALISE_CAP,
+                                with_info=False)
+    p = w ** 2 / np.sum(w ** 2)
+    assert 1 / np.sum(p ** 2) > 0.7 * len(w)
