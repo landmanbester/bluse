@@ -349,44 +349,32 @@ def build(rep, plots_dir):
         3, 5, "the deliverable &middot; scores/candidates.csv",
         '<h1 class="wide">Two thirds of the vetting list, '
         '<em>ranked to the bottom</em></h1>',
-        f"""<div class="body" style="flex-direction:column;gap:2.2cqw">
-      <div class="plate" style="flex:0 0 auto;padding:1.4cqw">
+        f"""<div class="body" style="flex-direction:column;gap:1.6cqw">
+      <div class="plate" style="flex:0 0 auto;padding:.5cqw">
         <img src="{img('track_e_funnel.png')}"
              alt="Stacked bar: {surv:,} Track A survivors split into
                   {alt_funnel}"></div>
-      <div class="body" style="margin-top:0">
-        <div class="col" style="flex:0 0 47%">
-          <div class="statrow">
-            <div class="stat"><span class="v">{ver.get('pruned', 0):,}</span>
-              <span class="k">survivors that look exactly<br>like multi-beam
-              RFI &mdash; vet them<br>last, not first</span></div>
-            <div class="stat"><span class="v plain">{surv:,}</span>
-              <span class="k">Track A survivors from<br>{hits:,} hits &mdash;
-              this set is a 5.6&#37;<br>draw, so
-              ~{round(surv / 0.056, -2):,.0f} survey-wide</span>
-            </div>
-          </div>
+      <div class="body" style="margin-top:0;gap:3cqw">
+        <div class="col" style="flex:0 0 30%">
+          <div class="stat"><span class="v">{ver.get('pruned', 0):,}</span>
+            <span class="k">of {surv:,} Track A survivors look<br>exactly like
+            multi-beam RFI &mdash;<br>vet them last, not first</span></div>
         </div>
         <div class="col grow">
-          <p>Also written: <strong class="mono">contrarian.csv</strong> &mdash;
+          <p>Also written: <strong class="mono">contrarian.csv</strong>,
           {rep['counts']['contrarian']:,} hits in &ge;32 beams that score
-          <em>clean</em>, where the filter and morphology disagree in the one
-          direction "the filter is conservative" cannot explain. And
-          <strong class="mono">ambiguous.csv</strong> &mdash;
-          {rep['counts']['ambiguous']:,} hits in 3&ndash;31 beams, where the
+          <em>clean</em>; and <strong class="mono">ambiguous.csv</strong>,
+          {rep['counts']['ambiguous']:,} hits in 3&ndash;31 beams where the
           filter abstains and this is the only verdict available.</p>
-          <p>Every row carries <span class="mono">row</span> and
-          <span class="mono">file</span>, so
-          <span class="mono">bluse-explore stamps --rows</span> plots it with
-          no join.</p>
           <p><strong>This is an ordering, not yet a cut.</strong> Turning it
-          into one needs an operating point, and an operating point needs
-          ground truth we do not have &mdash; see slide 5.</p>
+          into one needs an operating point, and that needs ground truth we do
+          not have &mdash; slide 5.</p>
         </div>
       </div>
     </div>""",
-        "<b>Say:</b> the number that matters operationally, and it scales &mdash; "
-        "~81,000 survivors survey-wide. Vetting order, not a delete button.")
+        "<b>Say:</b> the number that matters operationally. Vetting order, not "
+        "a delete button &mdash; and the full survey is much larger than this "
+        "set.")
 
     s4 = _slide(
         4, 5, "the honest slide &middot; what a low score means",

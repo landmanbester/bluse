@@ -153,8 +153,9 @@ def test_the_shipped_configuration_is_float64_and_seed_averaged():
 def test_the_boolean_flag_baseline_is_the_control():
     """
     Six boolean columns have two distinct values each, so no bin edge can move
-    under them -- and the flags AUC reads 0.9373 under every configuration
-    tested, both dtypes and any seed count, to four decimal places.
+    under them -- and the flags AUC reads 0.937311 in all eight configurations
+    tested (both dtypes x seeds {0}, {1}, {2} and {0,1,2}), identical to six
+    decimal places rather than merely close.
 
     That is what makes the rest of #9 a statement about bin placement rather
     than about the data, so it is worth a test of its own.
