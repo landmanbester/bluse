@@ -137,15 +137,24 @@ def test_the_written_score_reproduces_from_the_recorded_info():
 
 
 def test_scores_dir_is_created_on_demand(tmp_path, monkeypatch):
-    """A workspace built before Track E existed has no scores/ directory."""
+    """
+    A workspace built before Track E existed has no scores/ directory.
+
+    Restores paths._root through monkeypatch rather than by calling
+    set_workspace(None), which is a NO-OP: its body is guarded by `if path:`,
+    so passing None leaves the pin in place. An earlier version of this test
+    ended that way and silently pinned every later test in the session to a
+    tmp_path -- the twelve workspace tests stopped running and reported as
+    skipped, which looks like "no data here" rather than like a failure.
+    """
     import os
 
     from bluse import paths
 
+    monkeypatch.setattr(paths, "_root", None, raising=False)
+    monkeypatch.setattr(paths, "_how", None, raising=False)
     (tmp_path / "data").mkdir()
     (tmp_path / "features").mkdir()
-    monkeypatch.setenv(paths.ENV_VAR, str(tmp_path))
     paths.set_workspace(str(tmp_path))
     d = paths.scores_dir()
     assert d.endswith("scores") and os.path.isdir(d)
-    paths.set_workspace(None)
