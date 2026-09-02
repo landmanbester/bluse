@@ -39,9 +39,9 @@ that reason.
 An earlier version of this caveat blamed the scaled feature space instead,
 naming x03_channel_offset at 24.3% and f07_kurt_bw_corr at 13.1% of the global
 distance share. That was the wrong statistic: measured on k-NN pairs -- which
-is what HDBSCAN actually responds to -- x03 contributes 7.4% against an equal
+is what HDBSCAN actually responds to -- x03 contributes 5.9% against an equal
 share of 6.7%, i.e. it is already well behaved locally. The column the local
-measurement does indict is f09_temporal_skew, at 15.5% local against 6.7%
+measurement does indict is f09_temporal_skew, at 15.3% local against 6.7%
 equal, and benign on every global statistic.
 """
 

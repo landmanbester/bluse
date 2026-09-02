@@ -1,14 +1,14 @@
 # Outstanding work — BLUSE
 
-**Updated:** 2026-09-01, after closing P0-1, P0-2 and P1-4.
+**Updated:** 2026-09-02, after closing P0-3. All P0 items are now closed.
 **Purpose:** enough context to resume any item without re-deriving it.
 
-State: on `main`, clean tree, 61 tests passing (57 + 4 skipped outside a
+State: on `main`, clean tree, 66 tests passing (62 + 4 skipped outside a
 workspace). PR #1 merged the Cluster Bench measurement work — three new
 modules (`diagnostics`, `metrics`, `matching`), wiring into both entry points,
 and the repository's first test suite. P0-1 and P0-2 are since closed by
-measurement, as is P1-4; **P0-3 is the only open P0 item**, and P1-5 is
-unblocked and ready to spec.
+measurement, as are P1-4 and P0-3. **Every P0 item is closed.** The next
+item is P1-5, which is unblocked and ready to spec.
 
 ---
 
@@ -46,21 +46,29 @@ mismatched granularity):
 
 | column | global | k-NN | flags |
 |---|---:|---:|---|
-| `x03_channel_offset` | 24.3% | 7.4% | tie, share-high |
-| `f07_kurt_bw_corr` | 13.1% | 13.0% | clip |
-| `f12_bandwidth_hz` | 9.9% | 11.5% | tie |
-| `f10_timeseries_std` | 8.8% | 8.4% | — |
-| **`f09_temporal_skew`** | **6.7%** | **15.5%** | — |
-| `f13_redness` | 6.1% | 10.5% | — |
-| `f03_snr` | 6.7% | 4.2% | — |
-| `f11_spectrum_std` | 5.3% | 2.6% | — |
-| `f06_bimodality` | 4.2% | 4.4% | — |
-| `f01_frequency` | 3.2% | 7.2% | share-low |
-| `f04_spectral_skew` | 2.8% | 1.9% | share-low |
-| `f05_spectral_kurtosis` | 2.6% | 1.8% | share-low |
-| `x02_time_occupancy` | 2.5% | 7.2% | tie, share-low |
-| `x01_drift_residual` | 2.0% | 3.6% | share-low |
-| `f02_abs_drift` | 1.7% | 0.8% | tie, share-low |
+| `f09_temporal_skew` | 6.7% | **15.3%** | **share-high** |
+| `f07_kurt_bw_corr` | 13.1% | 12.8% | clip |
+| `f12_bandwidth_hz` | 9.9% | 12.0% | tie |
+| `f13_redness` | 6.1% | 11.0% | — |
+| `f10_timeseries_std` | 8.8% | 9.4% | — |
+| `x02_time_occupancy` | 2.5% | 8.3% | tie, share-disagree |
+| `x03_channel_offset` | **24.3%** | 5.9% | tie, share-disagree |
+| `f06_bimodality` | 4.2% | 5.4% | — |
+| `f01_frequency` | 3.2% | 5.2% | — |
+| `x01_drift_residual` | 2.0% | 3.9% | — |
+| `f03_snr` | 6.7% | 3.8% | — |
+| `f11_spectrum_std` | 5.3% | 2.5% | share-low |
+| `f05_spectral_kurtosis` | 2.6% | 2.1% | share-low |
+| `f04_spectral_skew` | 2.8% | 2.0% | share-low |
+| `f02_abs_drift` | 1.7% | 0.4% | tie, share-low, share-disagree |
+
+Sorted by k-NN share, which **now carries the flag threshold** (P0-3):
+`share-high` >2x equal, `share-low` <0.5x, and `share-disagree` where the two
+shares differ by >=2.5x either way. These figures are from the CORRECTED
+estimator -- earlier k-NN numbers in this repo were measured with a subsampled
+neighbour index and are biased by up to 2.1 points (`x03` was quoted at 7.4%,
+`f01` at 7.2%). Clustering-based conclusions are unaffected: those were
+measured by clustering, not from these shares.
 
 `f02` is a **42-level ordinal** on an exact 0.010711 Hz/s lattice (the seticore
 Taylor-tree drift step). The lattice constant is **per file** — six distinct
@@ -72,7 +80,7 @@ a physical drift rate.
 
 ---
 
-## P0 — do these before quoting numbers anywhere
+## P0 — all closed; kept for the reasoning
 
 ### 1. Restricted gap rule for the matching cut — **DONE 2026-09-01, REJECTED**
 
@@ -121,7 +129,9 @@ equalisation amplifies its 26.6% tie 5.2×.
 
 `f09` is 6.7% of the global distance share and **15.5% of the k-NN share** —
 the largest local contributor — and carries no flag because flags key on the
-global statistic. The earlier ablation dropped `x03` and `f07`, which the k-NN
+global statistic. (Both k-NN figures in this paragraph predate the P0-3
+estimator fix; corrected, they are 15.3% and 5.9%. Flags now key on k-NN, so
+`f09` does carry `share-high`.) The earlier ablation dropped `x03` and `f07`, which the k-NN
 measurement had already shown to be well behaved locally (7.4% against 6.7%
 equal), so it removed the wrong column and its result (narrow share
 6.820% → 2.969%) is a second demonstration of the k-NN finding, **not**
@@ -132,16 +142,29 @@ ARI. This is the fast read on whether contribution-equalising scaling would
 help or hurt, and it decides whether the deferred scaling spec is worth
 writing.
 
-### 3. Threshold `share_knn`
-Currently reported but deliberately unthresholded — no value had been measured
-when the flag rules were written. The baselines are now in the table above and
-in `acceptance-2026-09.md`. When thresholds land, **`share_knn` should become
-the primary statistic and `share_global` the secondary**, per implementation
-review §4. Until then the rail caption warns readers to prefer `knn` where the
-two disagree.
+### 3. Threshold `share_knn` — **DONE 2026-09-02**
 
-*Where:* `diagnostics.audit`, the flag block around the `share-high`/`share-low`
-logic; and `bench/templates/_controls.html` for the caption.
+Result in [`share-knn-threshold-2026-09.md`](share-knn-threshold-2026-09.md).
+
+`share_knn` is now primary: `share-high` >2× an equal share, `share-low` <½× —
+the same multipliers as the rule it replaces, because the local statistic is
+already the more selective of the two (mean 5.0 flags per file against 7.4).
+`share_global` is secondary and earns its keep through the new
+**`share-disagree`** flag at ≥2.5× either way, marking columns where the global
+number misleads (mean 2.1 per file).
+
+**The estimator was biased and had to be fixed first.** `_shares_knn` built the
+neighbour index on its own subsample, which thins the data and drifts the
+statistic toward the global share — a systematic error up to 2.18 points, 13×
+the seed noise. It now builds the index on every row and samples only the query
+points: 15–23× more accurate at equal cost class. All live `share_knn` figures
+were re-measured; the historical experiment docs are annotated rather than
+rewritten, and no clustering-based conclusion moved.
+
+Two flags changed on sband_short, both of them the point of the exercise:
+`x03_channel_offset` **loses** `share-high` (24.3% global, 5.9% local — below
+parity), and `f09_temporal_skew` **gains** it (15.3% local, invisible to the
+old rule at 6.7% global).
 
 ---
 

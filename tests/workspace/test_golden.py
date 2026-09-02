@@ -51,15 +51,48 @@ def test_f02_is_a_42_level_ordinal_on_sband_short():
     assert "tie" in a["flags"]
 
 
-def test_x03_is_over_weighted_on_sband_short():
+def test_x03_is_over_weighted_ONLY_GLOBALLY_on_sband_short():
+    """
+    The correction this audit exists to have made.
+
+    x03_channel_offset was indicted by the original review as over-weighted at
+    24.3% of the global distance share. It is 24.3% globally and only ~7.4%
+    locally, against an equal share of 6.7% -- i.e. locally it is an ordinary
+    column. Since HDBSCAN responds to core distances and mutual reachability,
+    both local, the local number is the one that describes what the clusterer
+    sees, and P0-3 moved the flag threshold onto it.
+
+    So x03 must NOT carry share-high any more. It carries share-disagree
+    instead, which says precisely the true thing: the global statistic
+    misleads here.
+    """
     a = _audit("sband_short")["x03_channel_offset_n"]
     assert a["share_global"] == pytest.approx(0.243, abs=0.02)
+    assert a["share_knn"] == pytest.approx(0.059, abs=0.015)
+    assert "share-high" not in a["flags"]
+    assert "share-disagree" in a["flags"]
+
+
+def test_f09_is_the_largest_local_contributor_on_sband_short():
+    """
+    The other half of the correction. f09_temporal_skew is 6.7% global -- dead
+    on an equal share, invisible to the old rule -- and 15.5% local, the
+    largest local contributor in the matrix. The calibrated rule flags it.
+    """
+    a = _audit("sband_short")["f09_temporal_skew_n"]
+    assert a["share_knn"] == pytest.approx(0.153, abs=0.02)
     assert "share-high" in a["flags"]
 
 
 def test_f02_is_under_weighted_on_sband_short():
+    """
+    f02 is under-weighted on BOTH statistics -- 1.7% global, 0.8% local -- so
+    the flag survives the move onto share_knn. Suppressing it is nevertheless
+    deliberate and measured; see docs/f02-rework-experiment-2026-09.md.
+    """
     a = _audit("sband_short")["f02_abs_drift_n"]
     assert a["share_global"] == pytest.approx(0.017, abs=0.01)
+    assert a["share_knn"] == pytest.approx(0.004, abs=0.004)
     assert "share-low" in a["flags"]
 
 

@@ -13,13 +13,18 @@
     {{ '%.1f'|format(features[0].equal_pct if features else 0) }}%.
     <b>tie</b> = largest repeated value, <b>clip</b> = fraction landing on
     &plusmn;5.<br>
-    <span style="opacity:.75"><b>Flags use the GLOBAL share. Where knn differs
-    sharply from it, prefer knn</b> &mdash; HDBSCAN responds to local density,
-    not to global spread. Measured: <code>x03_channel_offset</code> is 24.3%
-    global against 7.4% local, so its <code>share-high</code> flag overstates
-    the problem; <code>f09_temporal_skew</code> is 6.7% global against 15.5%
-    local and carries no flag at all. knn is deliberately unthresholded until
-    it is calibrated.<br>The two share flags are ONE observation, not two:
+    <span style="opacity:.75"><b>Flags use the KNN share</b> &mdash; HDBSCAN
+    responds to core distances and mutual reachability, both local, so the
+    local number is what the clusterer actually sees. Calibrated across all
+    seven files: <code>share-high</code> above 2&times; an equal share,
+    <code>share-low</code> below &frac12;&times;.<br>
+    <code>share-disagree</code> marks a column whose global and knn shares
+    differ by &ge;2.5&times; either way &mdash; there the global number
+    misleads. Measured: <code>x03_channel_offset</code> is 24.3% global
+    against 5.9% local, so it sits BELOW an equal share locally and is no longer
+    flagged high; <code>f09_temporal_skew</code> is 6.7% global against 15.3%
+    local (15.3%), the largest local contributor, which the old global rule missed
+    entirely.<br>The two share flags are ONE observation, not two:
     shares sum to 1, so a column at 24% mechanically depresses every other
     toward the lower bound.</span>
   </p>

@@ -439,10 +439,10 @@ distance are not equal at all:
 
 | column | global share | k-NN share | flags |
 |---|---:|---:|---|
-| `x03_channel_offset` | 24.3% | 7.4% | tie, share-high |
-| `f07_kurt_bw_corr` | 13.1% | 13.0% | clip |
-| `f09_temporal_skew` | 6.7% | **15.5%** | — |
-| `f02_abs_drift` | 1.7% | 0.8% | tie, share-low |
+| `x03_channel_offset` | 24.3% | 5.9% | tie, share-disagree |
+| `f07_kurt_bw_corr` | 13.1% | 12.8% | clip |
+| `f09_temporal_skew` | 6.7% | **15.3%** | **share-high** |
+| `f02_abs_drift` | 1.7% | 0.4% | tie, share-low, share-disagree |
 
 Equal share is 6.7%. **The two columns disagree, and that matters.** HDBSCAN
 keys on local density, so the k-NN column is the relevant one — and by it
@@ -457,10 +457,20 @@ eight files, spanning 5.26× — so `driftSteps` is a per-file index and is *not
 interchangeable with a physical drift rate. Its 26.6% tie at −5.199 halves its
 local share, exactly the tie–tie mechanism the audit predicts.
 
-`share_knn` is reported but **not thresholded**: no value for it had been
-measured when the flag rules were written, and inventing a bound then would
-have been the unverified-claim pattern this whole review cycle exists to
-correct. The values above are the baseline for thresholding it later.
+`share_knn` **now carries the flag threshold** — `share-high` above 2× an
+equal share, `share-low` below ½×. It shipped unthresholded because no value
+for it had been measured when the flag rules were written, and inventing a
+bound then would have been the unverified-claim pattern this review cycle
+exists to correct. It was calibrated in P0-3 across all seven per-file
+parquets, where those bounds mark a mean of 4.9 columns of 15 per file against
+7.4 for the same rule on the global share.
+
+`share_global` is now secondary and earns its place where it **disagrees**: the
+`share-disagree` flag marks a column whose two shares differ by ≥2.5× either
+way, i.e. one where the global number misleads. On sband_short that is `x03`
+(24.3% global, 5.9% local — so it is *not* flagged over-weighted any more) and
+`f02` (9.8× on uhf_short). See
+[`../docs/share-knn-threshold-2026-09.md`](../docs/share-knn-threshold-2026-09.md).
 
 ### Reproducibility is three numbers, never one
 
@@ -483,12 +493,12 @@ share from 6.820% to 2.969%, so the dominant columns help rather than hurt. That
 over-read the experiment, and the review said so: **dropping is not
 down-weighting** (equalisation would move `x03` from 24.3% to 6.7%, not to
 zero), and more decisively, **the k-NN measurement already says `x03` is fine** —
-7.4% local against a 6.7% equal share. The experiment removed a well-behaved
+5.9% local against a 6.7% equal share. The experiment removed a well-behaved
 column, so it is a second demonstration of the k-NN finding rather than evidence
 about equalisation.
 
 The column the local measurement actually indicts is **`f09_temporal_skew`**, at
-15.5% local against 6.7% equal and benign on every global statistic. That is the
+15.3% local against 6.7% equal and benign on every global statistic. That is the
 column to down-weight for a fast read on whether equalisation would help, and it
 is the real precursor to the deferred scaling spec.
 

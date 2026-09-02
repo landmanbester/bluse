@@ -152,6 +152,14 @@ handles it. Independently confirmed by the reviewer on structureless data
 `share_knn` shipped reported-but-unthresholded because no value for it had been
 measured. Now measured:
 
+> **Superseded 2026-09-02 (P0-3).** The k-NN figures in this section were
+> produced by an estimator that built its neighbour index on a 5,000-row
+> subsample, biasing them by up to 2.18 points. Corrected: `x03` **5.9%**,
+> `f09` **15.3%**, `f02` **0.4%**. The finding is unchanged and in fact
+> stronger — `x03` sits *below* an equal share locally, not merely at it.
+> `share_knn` now carries the flag threshold. See
+> [`../../docs/share-knn-threshold-2026-09.md`](../../docs/share-knn-threshold-2026-09.md).
+
 | column | global share | k-NN share |
 |---|---:|---:|
 | `x03_channel_offset` | 24.3% | **7.4%** |

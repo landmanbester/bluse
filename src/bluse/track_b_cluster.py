@@ -469,9 +469,13 @@ def main():
                   f"{r['max_tie_fraction']:6.3f} {r['clip_frac']:6.3f} "
                   f"{r['iqr_raw']:9.3f} {100*r['share_global']:6.1f}% "
                   f"{100*r['share_knn']:6.1f}%  {','.join(r['flags'])}")
-        print("\n  share_global carries the flag threshold; knn is reported "
-              "but not thresholded.\n  The two share flags are ONE "
-              "observation -- shares sum to 1.\n")
+        print(f"\n  knn carries the flag threshold "
+              f"(share-high >{diagnostics.SHARE_HIGH:g}x equal, share-low "
+              f"<{diagnostics.SHARE_LOW:g}x); HDBSCAN responds to local "
+              f"density.\n  share-disagree marks a column whose global and "
+              f"knn shares differ by >={diagnostics.SHARE_DISAGREE:g}x -- "
+              f"there the global number misleads.\n  The two share flags are "
+              f"ONE observation -- shares sum to 1.\n")
         return
 
     if args.mode == "epochs":

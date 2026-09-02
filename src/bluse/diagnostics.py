@@ -27,6 +27,18 @@ CLIP = 5.0          # scale() clips robust z-scores here
 TIE_FLAG = 0.10     # flag a continuous/ordinal column tying above this
 CLIP_FLAG = 0.01    # flag a column landing on the clip more often than this
 
+# Share thresholds, as multiples of an equal share (1/n_features). Calibrated
+# in docs/share-knn-threshold-2026-09.md across all seven per-file parquets:
+# at these values share_knn flags a mean of 4.9 columns of 15 per file, against
+# 7.4 for the same rule on share_global -- the local statistic is already the
+# more selective one. SHARE_DISAGREE flags a column whose two shares differ by
+# that factor either way, i.e. one where the global number misleads; at 2.5x it
+# marks a mean of 2.3 columns per file, at 2.0x it eventually marks 12 of 15
+# (too loose) and at 3.0x it misses f13_redness.
+SHARE_HIGH = 2.0
+SHARE_LOW = 0.5
+SHARE_DISAGREE = 2.5
+
 
 def robust_stats(X):
     """Median and IQR per column, for fitting a robust scaler on one row set."""
@@ -90,22 +102,33 @@ def _shares_knn(Z, k, rng, sample=5000):
     disproportionately likely to be mutual near neighbours because they already
     agree in that coordinate. The gap between share_global and share_knn is
     therefore itself the tie diagnostic, which is why both are reported.
+
+    THE INDEX IS BUILT ON EVERY ROW; only the QUERY points are sampled.
+    Sampling the index too -- which this did originally -- thins the data, so
+    each point's k nearest neighbours sit further away and the statistic drifts
+    toward the global share. That is a systematic bias, not sampling noise, and
+    it is much larger: measured on sband_short against the exact full-data
+    value, a 5,000-row subsampled index is off by 0.66 points on average and
+    2.18 at worst (f01_frequency reading 7.35% against a true 5.28%), while
+    5,000 queries against the full index are off by 0.044 and 0.095. Since the
+    flag threshold now keys on this number, that mattered.
     """
     from sklearn.neighbors import NearestNeighbors
     n = len(Z)
-    Zs = Z[rng.choice(n, sample, replace=False)] if n > sample else Z
-    k = int(max(2, min(k, len(Zs) - 1)))
-    nn = NearestNeighbors(n_neighbors=k + 1).fit(Zs)
-    _, ind = nn.kneighbors(Zs)
-    a = np.repeat(np.arange(len(Zs)), k)
+    k = int(max(2, min(k, n - 1)))
+    nn = NearestNeighbors(n_neighbors=k + 1).fit(Z)
+    q = (rng.choice(n, sample, replace=False) if n > sample
+         else np.arange(n))
+    _, ind = nn.kneighbors(Z[q])
+    a = np.repeat(q, k)
     b = ind[:, 1:].ravel()
-    per = ((Zs[a] - Zs[b]) ** 2).mean(axis=0)
+    per = ((Z[a] - Z[b]) ** 2).mean(axis=0)
     tot = per.sum()
     return per / tot if tot > 0 else np.full(len(per), np.nan)
 
 
 def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
-          knn_sample=5000, seed=0):
+          knn_sample=20_000, seed=0):
     """
     Audit every column of `raw` (n, n_features), pre-scaling.
 
@@ -144,28 +167,34 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
             flags.append("tie")
         if clip_frac > CLIP_FLAG:
             flags.append("clip")
-        # share_global carries the threshold because it was the statistic
-        # actually measured when these rules were written. share_knn is
-        # reported but NOT thresholded: no value for it existed then, and
-        # inventing a bound would have been the unverified-claim pattern this
-        # work exists to correct.
+        # share_knn CARRIES THE THRESHOLD. HDBSCAN responds to core distances
+        # and mutual reachability, both local, so the local statistic is the
+        # one describing what the clusterer actually sees; the global
+        # random-pair share is a proxy for it. These thresholds were withheld
+        # until calibrated rather than guessed -- see the P0-3 write-up for the
+        # cross-file measurement behind the constants.
         #
-        # SINCE MEASURED, and the flag is now known to be the weaker signal:
-        # on sband_short x03_channel_offset is 24.3% global but only 7.4%
-        # local, while f09_temporal_skew is 6.7% global and 15.5% local. HDBSCAN
-        # responds to local density, so share_knn is the more relevant
-        # statistic and should become primary once thresholds are calibrated.
-        # Until then the rail caption warns readers to prefer knn where the two
-        # disagree.
+        # share_global is now secondary, and earns its place only where it
+        # DISAGREES: a large ratio says the global number misleads for this
+        # column. The two cases, both measured on real files:
+        #   x03_channel_offset  24.3% global / 5.9% local on sband_short --
+        #     the column the original review indicted, on the strength of the
+        #     statistic that overstates it.
+        #   f09_temporal_skew   6.7% global / 15.3% local -- the largest local
+        #     contributor, which the global rule flagged not at all.
         #
         # The two share flags are ONE observation, not two: shares sum to 1, so
         # a column at 24% mechanically depresses every other toward the lower
         # bound. Useful for pointing at a column; not independent evidence.
-        if np.isfinite(sg[i]):
-            if sg[i] > 2 * equal:
+        if np.isfinite(sk[i]):
+            if sk[i] > SHARE_HIGH * equal:
                 flags.append("share-high")
-            elif sg[i] < 0.5 * equal:
+            elif sk[i] < SHARE_LOW * equal:
                 flags.append("share-low")
+        if np.isfinite(sg[i]) and np.isfinite(sk[i]) and sk[i] > 0:
+            ratio = sg[i] / sk[i]
+            if ratio >= SHARE_DISAGREE or ratio <= 1 / SHARE_DISAGREE:
+                flags.append("share-disagree")
 
         out.append({
             "col": col,
