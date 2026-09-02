@@ -26,6 +26,15 @@ aug_2026_workshop/catalogues/*.parquet
 aug_2026_workshop/clusters/*_candidates.csv
 aug_2026_workshop/clusters/*_metrics.json
 
+# Track E scores. Same rule as clusters/: the tracked record is the RESULT, not
+# the data store. all_scores.parquet is 32 MB of per-hit score and
+# ambiguous.csv is 68 MB of the 3-31 beam population -- both regenerate in
+# ~40 s from `bluse-score --no-report`. candidates.csv (4,565 Track A
+# survivors, ranked), contrarian.csv and report.json ARE tracked: together
+# ~1.3 MB, and they are what the last day of the workshop produced.
+aug_2026_workshop/scores/all_scores.parquet
+aug_2026_workshop/scores/ambiguous.csv
+
 # Plots are regenerated on demand by bluse-explore.
 aug_2026_workshop/plots/
 

@@ -439,3 +439,218 @@ def validate(df, *, n_splits=5, seed=0, exclude_mk=True,
         key=lambda d: -d["mean"])
     say(f"    top: {', '.join(d['column'] for d in rep['importance'][:3])}")
     return rep
+
+
+# ---------------------------------------------------------------------------
+# catalogues
+# ---------------------------------------------------------------------------
+
+# Where a survivor lands. Deliberately not a single cut: the middle band is
+# large and the honest thing is to say so rather than force every hit to a side.
+SHORTLIST_BELOW = 0.10     # "does not look like this survey's multi-beam RFI"
+PRUNED_ABOVE = 0.90        # "morphologically indistinguishable from known RFI"
+
+# Enough to find the hit again, and enough to plot it. `row` and `file` are what
+# `bluse-explore stamps --rows` needs, so a candidate list is directly
+# eyeballable without a join.
+PROVENANCE = ["file", "row", "id", "obsid", "sourceName", "beam", "frequency",
+              "driftRate", "snr", "n_beams", "beam_frac", "weak_label"]
+
+_SHORTLIST_WARNING = (
+    "A LOW SCORE IS NOT EVIDENCE OF A TECHNOSIGNATURE. The labels are "
+    "positive-unlabelled: weak_label==0 means seen in <=2 beams, not verified "
+    "clean, and most single-beam hits are still RFI. A low score says only "
+    "that the hit does not resemble this survey's multi-beam RFI."
+)
+
+
+def catalogues(df, score, *, shortlist_below=SHORTLIST_BELOW,
+               pruned_above=PRUNED_ABOVE):
+    """
+    Turn a column of scores into the three tables that are actually actionable.
+
+    `candidates`  every Track A survivor, ranked ascending, with a verdict.
+                  The deliverable: Track A leaves ~4,565 hits to vet by eye and
+                  the score says which of them look exactly like RFI.
+    `contrarian`  seen in >=32 beams AND scored clean. The spatial filter and
+                  morphology disagree in the direction that cannot be explained
+                  by the filter being conservative, so these are either
+                  instrumental or the model's blind spot. Small, and the set
+                  that teaches us the most.
+    `ambiguous`   3-31 beams, where the spatial filter abstains and this score
+                  is the only verdict available. The reason Track E exists.
+    """
+    keep = [c for c in PROVENANCE if c in df.columns]
+    out = df[keep].copy()
+    out["rfi_score"] = score
+
+    verdict = np.where(score < shortlist_below, "shortlist",
+                       np.where(score > pruned_above, "pruned", "uncertain"))
+    out["verdict"] = verdict
+
+    surv = (out[df["pass_all"].to_numpy()].sort_values("rfi_score")
+            if "pass_all" in df.columns else out.iloc[:0])
+    nb = df["n_beams"].to_numpy()
+    contrarian = out[(nb >= 32) & (score < shortlist_below)].sort_values("rfi_score")
+    ambiguous = out[(nb > 2) & (nb < 32)].sort_values("rfi_score")
+    return {"candidates": surv, "contrarian": contrarian, "ambiguous": ambiguous}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _json_safe(obj):
+    """Recursively replace non-finite floats with None, for strict JSON."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (float, np.floating)):
+        f = float(obj)
+        return f if np.isfinite(f) else None
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    if isinstance(obj, (bool, np.bool_)):
+        return bool(obj)
+    return obj
+
+
+def main():
+    import argparse
+    import json
+    import os
+    import time
+
+    from . import paths
+
+    p = argparse.ArgumentParser(
+        prog="bluse-score",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    paths.add_workspace_arg(p)
+    p.add_argument(
+        "--features", default="stamp", choices=sorted(FEATURE_SETS),
+        help="which columns the model may see. 'stamp' (default) is the 12 "
+             "morphology features computed from the stamp pixels -- it costs "
+             "0.0004 AUC against 'all' and cannot relearn the RFI frequency "
+             "mask, so it is not circular with Track A's own band cut. 'all' "
+             "adds frequency, |drift|, SNR and channel offset. 'meta' is those "
+             "four alone and 'flags' is Track A's six hand-built flags; both "
+             "exist as baselines, not as things to ship")
+    p.add_argument(
+        "--folds", type=int, default=5, metavar="K",
+        help="group-CV folds, split on obsid (default 5). Cross-validation is "
+             "how the score is DELIVERED, not just audited: a labelled hit "
+             "carries its out-of-fold score and an unlabelled one the mean of "
+             "the K fold models, so no hit is ever scored by a model that saw "
+             "its observation")
+    p.add_argument("--seed", type=int, default=0,
+                   help="RNG seed for the model (default 0)")
+    p.add_argument(
+        "--max-iter", type=int, default=300, metavar="N",
+        help="boosting iterations per fold (default 300). Below ~100 the "
+             "score degrades; above ~300 it does not improve")
+    p.add_argument(
+        "--include-mk", action="store_true",
+        help="train on mk_sample_hits too. Off by default: that file carries "
+             "~25 hits per observation against ~2,931 elsewhere, so its beam "
+             "multiplicity tops out at 9 of up to 64 formed beams and it can "
+             "contribute no RFI examples at all -- only a biased block of "
+             "negatives. It is scored either way")
+    p.add_argument(
+        "--no-report", action="store_true",
+        help="skip validate() and just write the scores. The report is seven "
+             "de-confounding measurements and about 3 minutes of the ~4 the "
+             "whole run takes; skip it when iterating, not when publishing")
+    p.add_argument(
+        "--shortlist-below", type=float, default=SHORTLIST_BELOW, metavar="P",
+        help=f"verdict 'shortlist' below this score (default "
+             f"{SHORTLIST_BELOW}). NOT a detection threshold -- see the "
+             f"warning this command prints")
+    p.add_argument(
+        "--pruned-above", type=float, default=PRUNED_ABOVE, metavar="P",
+        help=f"verdict 'pruned' above this score (default {PRUNED_ABOVE}); "
+             f"these are Track A survivors that look exactly like known RFI")
+    p.add_argument("--tag", default="", metavar="STR",
+                   help="prefix for the output filenames, to keep two runs "
+                        "side by side (default none)")
+    args = p.parse_args()
+    paths.set_workspace(args.workspace)
+    print(paths.banner())
+
+    t0 = time.time()
+    src = os.path.join(paths.features_dir(), "all_features.parquet")
+    if not os.path.exists(src):
+        raise SystemExit(paths.missing_workspace_message("all_features.parquet",
+                                                         src))
+    need = sorted(set(FEATURE_SETS["all"] + FLAG_COLUMNS + PROVENANCE + [
+        "weak_label", "group_id", "coarseChannel", "pass_all"]))
+    df = pd.read_parquet(src, columns=need)
+    print(f"{len(df):,} hits, {df.group_id.nunique()} observations, "
+          f"{df.file.nunique()} files  [{time.time() - t0:.0f}s]")
+
+    ev = evaluation_mask(df, exclude_mk=not args.include_mk)
+    print(f"  {int(ev.sum()):,} labelled and trainable "
+          f"({df.weak_label.eq(1).sum():,} RFI : "
+          f"{df.weak_label.eq(0).sum():,} confined), "
+          f"{int((df.weak_label < 0).sum()):,} ambiguous")
+
+    print(f"\nfitting {args.folds} folds on '{args.features}' "
+          f"({len(feature_columns(args.features))} features)...")
+    score, fold, info = fit_score(
+        df, features=args.features, n_splits=args.folds, seed=args.seed,
+        exclude_mk=not args.include_mk, max_iter=args.max_iter)
+    print(f"  scored {len(df):,} hits in {time.time() - t0:.0f}s")
+    print(f"  out-of-fold: {info['n_scored_out_of_fold']:,}   "
+          f"fold-mean: {info['n_scored_by_fold_mean']:,}")
+
+    out = paths.scores_dir()
+    tag = f"{args.tag}_" if args.tag else ""
+    sp = os.path.join(out, f"{tag}all_scores.parquet")
+    pd.DataFrame({"id": df["id"].to_numpy(), "file": df["file"].to_numpy(),
+                  "row": df["row"].to_numpy(), "rfi_score": score,
+                  "fold": fold, "model": args.features}).to_parquet(sp)
+    print(f"\nwrote {sp}")
+
+    cats = catalogues(df, score, shortlist_below=args.shortlist_below,
+                      pruned_above=args.pruned_above)
+    for name, tab in cats.items():
+        path = os.path.join(out, f"{tag}{name}.csv")
+        tab.to_csv(path, index=False)
+        print(f"wrote {path}  ({len(tab):,} rows)")
+
+    c = cats["candidates"]
+    if len(c):
+        v = c.verdict.value_counts()
+        print(f"\nTRACK A SURVIVORS: {len(c):,}")
+        print(f"  pruned    {v.get('pruned', 0):>6,} "
+              f"({v.get('pruned', 0) / len(c):>5.1%})  score > {args.pruned_above}"
+              f"  -- look exactly like known multi-beam RFI")
+        print(f"  uncertain {v.get('uncertain', 0):>6,} "
+              f"({v.get('uncertain', 0) / len(c):>5.1%})")
+        print(f"  shortlist {v.get('shortlist', 0):>6,} "
+              f"({v.get('shortlist', 0) / len(c):>5.1%})  score < "
+              f"{args.shortlist_below}")
+        print(f"\n  {_SHORTLIST_WARNING}")
+        print(f"\n  10 lowest-scoring survivors:")
+        cols = [c_ for c_ in ["file", "sourceName", "frequency", "snr",
+                              "n_beams", "rfi_score"] if c_ in c.columns]
+        print("    " + c.head(10)[cols].to_string(index=False).replace("\n", "\n    "))
+
+    rep = {"info": info, "shortlist_below": args.shortlist_below,
+           "pruned_above": args.pruned_above,
+           "counts": {k: int(len(v)) for k, v in cats.items()}}
+    if not args.no_report:
+        print("\nvalidating...")
+        rep["validation"] = validate(df, n_splits=args.folds, seed=args.seed,
+                                     exclude_mk=not args.include_mk)
+    rp = os.path.join(out, f"{tag}report.json")
+    with open(rp, "w") as fh:
+        json.dump(_json_safe(rep), fh, indent=2, allow_nan=False)
+    print(f"\nwrote {rp}")
+    print(f"total {time.time() - t0:.0f}s")
+
+
+if __name__ == "__main__":
+    main()

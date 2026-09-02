@@ -40,7 +40,8 @@ ENV_VAR = "BLUSE_ROOT"
 
 # Created on demand. `data` is deliberately absent -- we never invent an input
 # directory, because an empty one is indistinguishable from a wrong workspace.
-OUTPUT_SUBDIRS = ("catalogues", "features", "clusters", "plots", "masks")
+OUTPUT_SUBDIRS = ("catalogues", "features", "clusters", "plots", "masks",
+                  "scores")
 
 _root: str | None = None
 
@@ -193,6 +194,12 @@ def clusters_dir() -> str:
 
 def plots_dir() -> str:
     return subdir("plots")
+
+
+def scores_dir() -> str:
+    """Track E output. Created on demand -- it is the newest subdir, so a
+    workspace built before Track E existed will not have one."""
+    return subdir("scores", create=True)
 
 
 def resolve_files(given) -> list[str]:
