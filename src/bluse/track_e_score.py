@@ -188,3 +188,254 @@ def fit_score(df, *, features="stamp", n_splits=5, seed=0, exclude_mk=True,
         "folds": folds,
     }
     return score, fold, info
+
+# ---------------------------------------------------------------------------
+# validation
+# ---------------------------------------------------------------------------
+
+# Which band each delivered file observes. Used only to hold a whole band out:
+# "general RFI morphology or memorised band-specific emitters?" cannot be
+# answered by any split that keeps the band in training.
+BANDS = {"lband_long": "L", "lband_short": "L", "uhf_long": "UHF",
+         "uhf_short": "UHF", "sband_long": "S", "sband_short": "S",
+         "mk_sample_hits": "MK"}
+
+# The n_beams bins the monotonicity check reports. The gap between 2 and 32 is
+# the whole point: those five bins are in NO training fold, so a monotone score
+# across them is out-of-class generalisation, not a fitted boundary.
+NBEAM_BINS = [0, 1, 2, 3, 5, 9, 17, 32, 49, 65]
+TRAINED_BINS = {"(0, 1]", "(1, 2]", "(32, 49]", "(49, 65]"}
+
+
+def _auc(y, s):
+    """ROC-AUC, or NaN where it is undefined -- rather than an exception."""
+    from sklearn.metrics import roc_auc_score
+    y, s = np.asarray(y), np.asarray(s)
+    ok = np.isfinite(s)
+    if ok.sum() < 2 or len(np.unique(y[ok])) < 2:
+        return float("nan")
+    return float(roc_auc_score(y[ok], s[ok]))
+
+
+def evaluation_mask(df, *, exclude_mk=True):
+    """
+    The rows a reported AUC may be computed over: labelled AND trainable.
+
+    Not a detail. Scoring a file that was excluded from training and then
+    folding it into the headline measures distribution shift and calls it
+    accuracy. Measured: including mk_sample_hits in the evaluation of a model
+    that never trained on it moves the stamp AUC from 0.9884 to 0.9795, because
+    the model scores that pre-filtered file's confined hits as RFI. That is a
+    real and useful finding -- it is reported by validate() under "ood" -- but
+    it is not a statement about how well the score works on the survey.
+    """
+    m = df["weak_label"].to_numpy() >= 0
+    if exclude_mk and "file" in df.columns:
+        m &= ~df["file"].isin(PREFILTERED_FILES).to_numpy()
+    return m
+
+
+def validate(df, *, n_splits=5, seed=0, exclude_mk=True,
+             importance_sample=20_000, verbose=True):
+    """
+    Reproduce every number the write-up quotes, from the shipped code.
+
+    This exists because the result is only as good as its de-confounding. A
+    0.99 AUC for predicting beam multiplicity from morphology has at least five
+    boring explanations, and each block below closes one:
+
+      ablation        is morphology worth more than Track A's own flags?
+      nonzero_drift   x01 is NaN exactly at zero drift and P(RFI|NaN)=0.996,
+                      a 29.6% freebie -- does the result survive without it?
+      snr_stratified  a signal must be BRIGHT to reach 32 beams, so the score
+                      could be a brightness meter; within an SNR decile it
+                      cannot be
+      signal_level    one emitter yields up to 64 near-duplicate rows, which
+                      could be inflating every row-wise metric
+      cross_band      hold out a whole band: general morphology, or memorised
+                      emitters?
+      per_file        is one file carrying the result?
+      ood             what happens on a differently-filtered hit population --
+                      the case the BLUSE team hits the moment they apply this
+                      to new data
+
+    Returns a dict of plain floats, ready for json.dump.
+    """
+    from sklearn.inspection import permutation_importance
+    from sklearn.metrics import average_precision_score
+
+    def say(*a):
+        if verbose:
+            print(*a, flush=True)
+
+    ev = evaluation_mask(df, exclude_mk=exclude_mk)
+    y = df["weak_label"].to_numpy()[ev].astype(int)
+    rep = {"n_rows": int(len(df)), "n_evaluated": int(ev.sum()),
+           "n_groups": int(df["group_id"].nunique()), "exclude_mk": exclude_mk,
+           "base_rate": float(y.mean()), "n_splits": n_splits, "seed": seed}
+
+    # --- ablation ---------------------------------------------------------
+    say("  ablation (4 feature sets)...")
+    oof, rep["ablation"] = {}, {}
+    for name in ("flags", "meta", "stamp", "all"):
+        s, _, info = fit_score(df, features=name, n_splits=n_splits, seed=seed,
+                               exclude_mk=exclude_mk)
+        oof[name] = s
+        rep["ablation"][name] = {
+            "n_features": len(info["columns"]),
+            "roc_auc": _auc(y, s[ev]),
+            "pr_auc": float(average_precision_score(y, s[ev])),
+        }
+        say(f"    {name:6s} n={len(info['columns']):2d} "
+            f"AUC={rep['ablation'][name]['roc_auc']:.4f}")
+    primary = oof["stamp"][ev]
+
+    # --- the zero-drift freebie -------------------------------------------
+    say("  without zero-drift rows...")
+    nz = ~df["flag_zero_drift"].to_numpy()[ev]
+    rep["nonzero_drift"] = {
+        "n": int(nz.sum()), "base_rate": float(y[nz].mean()),
+        "stamp": _auc(y[nz], primary[nz]),
+        "all": _auc(y[nz], oof["all"][ev][nz]),
+        "flags": _auc(y[nz], oof["flags"][ev][nz]),
+    }
+    say(f"    stamp={rep['nonzero_drift']['stamp']:.4f} "
+        f"flags={rep['nonzero_drift']['flags']:.4f}")
+
+    # --- brightness --------------------------------------------------------
+    say("  SNR-stratified...")
+    snr = df["snr"].to_numpy()[ev]
+    dec = pd.qcut(snr, 10, labels=False, duplicates="drop")
+    rows, num, den = [], 0.0, 0
+    for d in sorted(pd.unique(dec)):
+        m = dec == d
+        a = _auc(y[m], primary[m])
+        rows.append({"decile": int(d), "n": int(m.sum()),
+                     "snr_lo": float(snr[m].min()), "snr_hi": float(snr[m].max()),
+                     "base_rate": float(y[m].mean()), "roc_auc": a})
+        if np.isfinite(a):
+            num += a * m.sum(); den += int(m.sum())
+    rep["snr_stratified"] = {"deciles": rows,
+                             "weighted": float(num / den) if den else float("nan")}
+    say(f"    weighted within-decile AUC = {rep['snr_stratified']['weighted']:.4f}")
+
+    # --- duplication -------------------------------------------------------
+    say("  signal-level (collapsing near-duplicate rows)...")
+    sig = (df["group_id"].astype(str) + "|" + df["coarseChannel"].astype(str)
+           + "|" + np.round(df["frequency"].to_numpy() * 1e6).astype("int64").astype(str)
+           + "|" + np.round(df["driftRate"].to_numpy(), 4).astype(str))
+    sd = pd.DataFrame({"sig": sig.to_numpy()[ev], "y": y, "s": primary})
+    agg = sd.groupby("sig").agg(y=("y", "max"), s=("s", "median"), n=("y", "size"))
+    one = (agg.n == 1).to_numpy()
+    rep["signal_level"] = {
+        "n_signals": int(len(agg)),
+        "rows_per_signal": float(len(sd) / len(agg)),
+        "median_per_signal": _auc(agg.y.to_numpy(), agg.s.to_numpy()),
+        "n_singletons": int(one.sum()),
+        "singleton": _auc(agg.y.to_numpy()[one], agg.s.to_numpy()[one]),
+    }
+    say(f"    per-signal={rep['signal_level']['median_per_signal']:.4f} "
+        f"singleton={rep['signal_level']['singleton']:.4f}")
+
+    # --- generalisation ----------------------------------------------------
+    say("  cross-band (hold out a whole band)...")
+    edf = df[ev].reset_index(drop=True)
+    eband = edf["file"].map(BANDS).to_numpy()
+    rep["cross_band"] = {}
+    for b in ("L", "UHF", "S"):
+        te = eband == b
+        tr = (~te) & (eband != "MK")
+        if te.sum() == 0 or len(np.unique(y[tr])) < 2:
+            continue
+        got = {}
+        for name in ("stamp", "all"):
+            cols = feature_columns(name)
+            m = HistGradientBoostingClassifier(
+                max_iter=300, early_stopping=False, random_state=seed)
+            m.fit(edf.loc[tr, cols].to_numpy(np.float32), y[tr])
+            got[name] = _auc(y[te], m.predict_proba(
+                edf.loc[te, cols].to_numpy(np.float32))[:, 1])
+        rep["cross_band"][b] = {"n_test": int(te.sum()),
+                                "base_rate": float(y[te].mean()), **got}
+        say(f"    held out {b:3s} stamp={got['stamp']:.4f} all={got['all']:.4f}")
+
+    # --- per file ----------------------------------------------------------
+    rep["per_file"] = {}
+    files = df["file"].to_numpy()[ev]
+    for f in sorted(pd.unique(files)):
+        m = files == f
+        rep["per_file"][str(f)] = {
+            "n": int(m.sum()), "base_rate": float(y[m].mean()),
+            "roc_auc": _auc(y[m], primary[m])}
+
+    # --- out of distribution ------------------------------------------------
+    # mk_sample_hits was pre-filtered before delivery, and its labels do not
+    # mean what they mean elsewhere. `n_beams` is counted WITHIN a file, and
+    # this file carries ~25 hits per observation against ~2,931 in the others,
+    # so its beam multiplicity tops out at 9 of up to 64 formed beams. Nothing
+    # in it can reach the >=32 threshold: it contributes zero positives by
+    # construction, and "<=2 beams" there is not established confinement so
+    # much as a file too sparse to count.
+    #
+    # So the two readings of the number below cannot be separated from these
+    # data -- either the model is wrong about this file, or the file's labels
+    # are. The ceiling at 9 makes the labels the more suspect of the two, and
+    # a frequency-tolerance match against the same obsids in lband_long
+    # resolves nothing: only 0.6% of mk hits have an lband_long hit within 2 Hz,
+    # so this is a different hit list, not a subsample of one we hold.
+    #
+    # The operational conclusion is the same either way, and it is the one that
+    # matters when the BLUSE team points this at new data: a score fitted to
+    # how THIS survey's hits were selected does not transfer, unchecked, to a
+    # hit list selected differently.
+    ood = (df["file"].isin(PREFILTERED_FILES) & (df["weak_label"] >= 0)).to_numpy()
+    if exclude_mk and ood.any():
+        s = oof["stamp"][ood]
+        rep["ood"] = {
+            "file": list(PREFILTERED_FILES), "n": int(ood.sum()),
+            "n_positive": int((df["weak_label"].to_numpy()[ood] == 1).sum()),
+            "mean_score": float(np.nanmean(s)),
+            "frac_scored_rfi": float(np.nanmean(s > 0.5)),
+            "auc_including_it": _auc(
+                df["weak_label"].to_numpy()[ev | ood].astype(int),
+                oof["stamp"][ev | ood]),
+        }
+        say(f"  out-of-distribution ({', '.join(PREFILTERED_FILES)}): "
+            f"{rep['ood']['frac_scored_rfi']:.1%} of known-confined hits "
+            f"scored >0.5")
+
+    # --- the monotonicity table -------------------------------------------
+    b = pd.cut(df["n_beams"], NBEAM_BINS, right=True)
+    t = pd.DataFrame({"bin": b.astype(str), "s": oof["stamp"]})
+    g = t.groupby("bin", observed=True)["s"].agg(["size", "mean", "median"])
+    g = g.reindex([str(i) for i in b.cat.categories]).dropna()
+    rep["n_beams_monotonicity"] = {
+        "bins": [{"bin": i, "n": int(r["size"]), "mean_score": float(r["mean"]),
+                  "median_score": float(r["median"]),
+                  "in_training": i in TRAINED_BINS} for i, r in g.iterrows()],
+        "monotone": bool(np.all(np.diff(g["mean"].to_numpy()) > 0)),
+    }
+    say(f"  monotone across all {len(g)} n_beams bins: "
+        f"{rep['n_beams_monotonicity']['monotone']}")
+
+    # --- what morphology actually says RFI ---------------------------------
+    say("  permutation importance...")
+    cols = feature_columns("stamp")
+    ei = np.flatnonzero(ev)
+    tr, te = next(GroupKFold(n_splits).split(
+        ei, y, df["group_id"].to_numpy()[ev]))
+    m = HistGradientBoostingClassifier(max_iter=300, early_stopping=False,
+                                       random_state=seed)
+    m.fit(df.iloc[ei[tr]][cols].to_numpy(np.float32), y[tr])
+    rng = np.random.default_rng(seed)
+    pick = te if len(te) <= importance_sample else rng.choice(
+        te, importance_sample, replace=False)
+    r = permutation_importance(m, df.iloc[ei[pick]][cols].to_numpy(np.float32),
+                               y[pick], n_repeats=5, random_state=seed,
+                               scoring="roc_auc", n_jobs=-1)
+    rep["importance"] = sorted(
+        [{"column": c, "mean": float(a), "std": float(sd_)}
+         for c, a, sd_ in zip(cols, r.importances_mean, r.importances_std)],
+        key=lambda d: -d["mean"])
+    say(f"    top: {', '.join(d['column'] for d in rep['importance'][:3])}")
+    return rep
