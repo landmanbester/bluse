@@ -63,8 +63,10 @@ Either way you get five commands:
 | `bluse-features` | Track B step 1: extract the feature matrix |
 | `bluse-cluster` | Track B step 2: HDBSCAN over those features |
 | `bluse-bench` | Cluster Bench: interactive clustering in the browser |
+| `bluse-score` | Track E: a morphology-only RFI score for every hit |
+| `bluse-score-plots` | redraw the Track E figures from an existing report |
 
-All five take `--help`.
+All of them take `--help`.
 
 ## Getting the data
 
@@ -493,6 +495,8 @@ src/bluse/               the installed package
     features.py          the feature registry
     track_b_features.py  bluse-features
     track_b_cluster.py   bluse-cluster
+    track_e_score.py     bluse-score
+    track_e_plots.py     bluse-score-plots
     bench/               bluse-bench — Cluster Bench
 aug_2026_workshop/       the working record: results, findings, decisions
     README.md            per-file numbers, caveats, what to distrust
@@ -528,11 +532,57 @@ Still open, in rough priority order:
   every batch, so real signals resembling them have something to cluster with
   and can be tracked through the epochs. Cheap, and the paper's own suggestion
   for tuning the method toward a signal type by example.
-- **Track E: a weak-supervision classifier** on `weak_label` / `group_id`.
-  The columns are already in every feature parquet.
 - **Tracks C and D** — Astronomaly-style active learning, and self-supervised
   representations. See `brainstorming.md`.
-- **A clean `uhf_long.h5`**, on the same terms as `lband_short_clean.h5`.
+- **Synthetic injections.** The only true objective function available: every
+  Track E number measures agreement with the spatial filter, which is a good
+  instrument and not ground truth.
+
+*(Track E landed 2026-09-03 — see below. `uhf_long.h5` and `lband_short.h5`
+were re-delivered repaired on 2026-09-02, so the "clean file" item is closed.)*
+
+## Track E — the RFI score
+
+```bash
+bluse-score                      # ~4 min: fit, score 2M hits, catalogues, report, figures
+bluse-score --no-report          # ~40 s: scores only
+bluse-score --features all       # 16 features instead of the 12 stamp columns
+bluse-score-plots                # redraw the figures without refitting
+```
+
+The multi-beam spatial filter is the survey's strongest discriminant and it is
+**blind on single-beam hits** — it needs many beams' worth of evidence, and a
+technosignature is a one-beam hit. Track E takes the filter's own verdicts as
+free labels and learns them from the **stamp morphology alone**, so the same
+judgement is available where the filter has nothing to say.
+
+Group 5-fold on `obsid`, 1,599,299 labelled hits, 444 observations:
+
+| | ROC-AUC |
+|---|---:|
+| **12 stamp-morphology features** | **0.9887** |
+| Track A's entire flag set | 0.9373 |
+
+Trained only on ≤2 and ≥32 beams, the score orders the untrained 3–31 range
+monotonically across every bin — 422,480 hits it never saw. It survives
+dropping the zero-drift rows, SNR stratification, collapsing beam duplicates,
+and holding out a whole band. Full method, every de-confounding check, and what
+would falsify it: [`docs/track-e-2026-09.md`](docs/track-e-2026-09.md).
+
+**Output** in `scores/`, with figures in `plots/`:
+
+| file | what it is |
+|---|---|
+| `candidates.csv` | every Track A survivor, ranked. **3,003 of 4,565 (66%) look exactly like multi-beam RFI** |
+| `contrarian.csv` | 3,303 hits in ≥32 beams that score clean — filter and morphology disagreeing |
+| `ambiguous.csv` | 411,898 hits in 3–31 beams, where the filter abstains |
+| `all_scores.parquet` | `rfi_score` on all 2,014,055 hits |
+
+**A high score is strong evidence of RFI. A low score is not evidence of a
+technosignature** — the labels are positive-unlabelled, and the 524-hit
+shortlist collapses to about 49 frequency groups whose stamps show two
+*instrumental* populations. See
+[`NOMENCLATURE.md`](NOMENCLATURE.md#rfi-score) before quoting any of it.
 
 ## Licence
 

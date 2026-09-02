@@ -19,7 +19,7 @@
     "n_splits": 5,
     "seed": 0,
     "max_iter": 300,
-    "exclude_mk": 1,
+    "exclude_mk": true,
     "n_rows": 2014055,
     "n_train": 1599299,
     "n_groups": 444,
@@ -61,11 +61,20 @@
     "contrarian": 3303,
     "ambiguous": 411898
   },
+  "verdicts": {
+    "pruned": 3003,
+    "uncertain": 1038,
+    "shortlist": 524
+  },
+  "survey": {
+    "n_hits": 2014055,
+    "n_survivors": 4565
+  },
   "validation": {
     "n_rows": 2014055,
     "n_evaluated": 1599299,
     "n_groups": 444,
-    "exclude_mk": 1,
+    "exclude_mk": true,
     "base_rate": 0.8201274433361117,
     "n_splits": 5,
     "seed": 0,
@@ -259,66 +268,66 @@
           "n": 200959,
           "mean_score": 0.06067210825591264,
           "median_score": 0.0009716713574112899,
-          "in_training": 1
+          "in_training": true
         },
         {
           "bin": "(1, 2]",
           "n": 90776,
           "mean_score": 0.1200622716435826,
           "median_score": 0.0012734077854282325,
-          "in_training": 1
+          "in_training": true
         },
         {
           "bin": "(2, 3]",
           "n": 53031,
           "mean_score": 0.1810280531423318,
           "median_score": 0.001685938614885301,
-          "in_training": 0
+          "in_training": false
         },
         {
           "bin": "(3, 5]",
           "n": 64765,
           "mean_score": 0.27017286871771057,
           "median_score": 0.002521635607419375,
-          "in_training": 0
+          "in_training": false
         },
         {
           "bin": "(5, 9]",
           "n": 72777,
           "mean_score": 0.44321908738738297,
           "median_score": 0.043437748277588915,
-          "in_training": 0
+          "in_training": false
         },
         {
           "bin": "(9, 17]",
           "n": 91399,
           "mean_score": 0.7107959810551407,
           "median_score": 0.9470804019544335,
-          "in_training": 0
+          "in_training": false
         },
         {
           "bin": "(17, 32]",
           "n": 140508,
           "mean_score": 0.9005940578278947,
           "median_score": 0.9754248608246472,
-          "in_training": 0
+          "in_training": false
         },
         {
           "bin": "(32, 49]",
           "n": 195345,
           "mean_score": 0.9584691697419185,
           "median_score": 0.9877861171778219,
-          "in_training": 1
+          "in_training": true
         },
         {
           "bin": "(49, 65]",
           "n": 1104495,
           "mean_score": 0.9856614603738892,
           "median_score": 0.9968763058194192,
-          "in_training": 1
+          "in_training": true
         }
       ],
-      "monotone": 1
+      "monotone": true
     },
     "importance": [
       {

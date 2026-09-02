@@ -113,11 +113,17 @@ def test_the_prefiltered_file_is_flagged_as_out_of_distribution():
     mk_sample_hits carries ~25 hits per observation against ~2,931 elsewhere, so
     its beam multiplicity tops out at 9 of up to 64 formed beams and it can
     contribute no positives at all. The model, trained on the other six files,
-    scores 94.2% of its nominally-confined hits as RFI.
+    scores 94.2% of its nominally-confined hits as RFI -- and is RIGHT to.
 
-    Pinned so the number stays visible: it is the evidence for the one caveat
-    that matters operationally -- this score does not transfer, unchecked, to a
-    hit list selected differently from the one it was fitted on.
+    8,116 hits appear in both mk_sample_hits and lband_long under the same id,
+    frequency and beam; the same hit is counted in a mean of 1.87 beams there
+    against 29.71 in lband_long, and of the 6,141 mk calls confined, lband_long
+    puts 1,813 in >=32 beams. The labels are the artefact, not the score.
+
+    Pinned so the number stays visible: it is the mechanism behind the caveat
+    that matters operationally -- a hit list selected differently from the one
+    this score was fitted on will not behave the same way, and neither will the
+    spatial filter it learned from.
     """
     r = _report()["ood"]
     assert r["n_positive"] == 0

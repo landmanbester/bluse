@@ -372,22 +372,24 @@ def validate(df, *, n_splits=5, seed=0, exclude_mk=True,
     # mk_sample_hits was pre-filtered before delivery, and its labels do not
     # mean what they mean elsewhere. `n_beams` is counted WITHIN a file, and
     # this file carries ~25 hits per observation against ~2,931 in the others,
-    # so its beam multiplicity tops out at 9 of up to 64 formed beams. Nothing
-    # in it can reach the >=32 threshold: it contributes zero positives by
-    # construction, and "<=2 beams" there is not established confinement so
-    # much as a file too sparse to count.
+    # so its beam multiplicity tops out at 9 of up to 64 formed beams. It
+    # contributes zero positives by construction.
     #
-    # So the two readings of the number below cannot be separated from these
-    # data -- either the model is wrong about this file, or the file's labels
-    # are. The ceiling at 9 makes the labels the more suspect of the two, and
-    # a frequency-tolerance match against the same obsids in lband_long
-    # resolves nothing: only 0.6% of mk hits have an lband_long hit within 2 Hz,
-    # so this is a different hit list, not a subsample of one we hold.
+    # The number below -- 94.2% of its nominally-confined hits scored as RFI --
+    # is the model being RIGHT about labels that are wrong. Measured directly:
+    # 8,116 hits appear in both mk_sample_hits and lband_long under the same
+    # id, same frequency, same beam, and the same hit is counted in a mean of
+    # 1.87 beams there against 29.71 here. Of the 6,141 that mk calls confined,
+    # lband_long puts 1,813 (29.5%) in >=32 beams.
     #
-    # The operational conclusion is the same either way, and it is the one that
-    # matters when the BLUSE team points this at new data: a score fitted to
-    # how THIS survey's hits were selected does not transfer, unchecked, to a
-    # hit list selected differently.
+    # (Testing this by matching FREQUENCIES inside all_features.parquet finds
+    # nothing, because that table deduplicates on id and the overlap is
+    # structurally invisible in it. The per-file Track A catalogues keep it.)
+    #
+    # Kept in the report because it is the mechanism behind the caveat that
+    # matters operationally: a hit list selected differently from the one this
+    # score was fitted on will not behave the same way -- and neither will the
+    # spatial filter it learned from.
     ood = (df["file"].isin(PREFILTERED_FILES) & (df["weak_label"] >= 0)).to_numpy()
     if exclude_mk and ood.any():
         s = oof["stamp"][ood]
@@ -506,13 +508,19 @@ def _json_safe(obj):
         return {k: _json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_json_safe(v) for v in obj]
+    # bool BEFORE int: bool is a subclass of int, so the int branch would
+    # catch True and write 1. That survives json.loads and stays truthy, so it
+    # looks harmless -- until a consumer does np.array(flags) and gets an int
+    # array, where `arr[mask]` silently becomes fancy indexing and `~mask`
+    # becomes bitwise NOT. That is exactly how the first draft of the
+    # monotonicity figure drew the wrong five points.
+    if isinstance(obj, (bool, np.bool_)):
+        return bool(obj)
     if isinstance(obj, (float, np.floating)):
         f = float(obj)
         return f if np.isfinite(f) else None
     if isinstance(obj, (int, np.integer)):
         return int(obj)
-    if isinstance(obj, (bool, np.bool_)):
-        return bool(obj)
     return obj
 
 
@@ -572,6 +580,11 @@ def main():
         "--pruned-above", type=float, default=PRUNED_ABOVE, metavar="P",
         help=f"verdict 'pruned' above this score (default {PRUNED_ABOVE}); "
              f"these are Track A survivors that look exactly like known RFI")
+    p.add_argument(
+        "--no-plots", action="store_true",
+        help="skip the five figures. They are drawn from the report, so "
+             "--no-report implies this; `bluse-score-plots` redraws them from "
+             "an existing report without refitting")
     p.add_argument("--tag", default="", metavar="STR",
                    help="prefix for the output filenames, to keep two runs "
                         "side by side (default none)")
@@ -640,7 +653,11 @@ def main():
 
     rep = {"info": info, "shortlist_below": args.shortlist_below,
            "pruned_above": args.pruned_above,
-           "counts": {k: int(len(v)) for k, v in cats.items()}}
+           "counts": {k: int(len(v)) for k, v in cats.items()},
+           "verdicts": {k: int(n) for k, n in
+                        cats["candidates"].verdict.value_counts().items()},
+           "survey": {"n_hits": int(len(df)),
+                      "n_survivors": int(len(cats["candidates"]))}}
     if not args.no_report:
         print("\nvalidating...")
         rep["validation"] = validate(df, n_splits=args.folds, seed=args.seed,
@@ -649,7 +666,13 @@ def main():
     with open(rp, "w") as fh:
         json.dump(_json_safe(rep), fh, indent=2, allow_nan=False)
     print(f"\nwrote {rp}")
-    print(f"total {time.time() - t0:.0f}s")
+
+    if not (args.no_plots or args.no_report):
+        from . import track_e_plots
+        print()
+        for path in track_e_plots.all_figures(rep, paths.plots_dir()):
+            print(f"wrote {path}")
+    print(f"\ntotal {time.time() - t0:.0f}s")
 
 
 if __name__ == "__main__":

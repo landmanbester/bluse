@@ -95,10 +95,28 @@ def test_the_report_is_strict_json_with_no_nan():
     else's machine.
     """
     obj = {"a": float("nan"), "b": [1.0, float("inf")], "c": np.int64(3),
-           "d": np.True_, "e": {"f": np.float32("nan")}}
+           "d": np.True_, "e": {"f": np.float32("nan")}, "g": True}
     s = json.dumps(E._json_safe(obj), allow_nan=False)
     assert json.loads(s) == {"a": None, "b": [1.0, None], "c": 3, "d": True,
-                             "e": {"f": None}}
+                             "e": {"f": None}, "g": True}
+
+
+def test_booleans_survive_as_booleans_not_as_ones():
+    """
+    bool is a subclass of int, so an int branch placed first catches True and
+    writes 1. `1 == True` in Python, so an equality assertion does NOT catch it
+    -- the first version of the test above passed while the report was writing
+    integers.
+
+    It matters downstream: np.array([1, 1, 0]) is an INT array, where `x[mask]`
+    is fancy indexing rather than masking and `~mask` is bitwise NOT. That is
+    how the monotonicity figure first drew the wrong five points, silently and
+    plausibly.
+    """
+    out = E._json_safe({"t": True, "f": False, "n": np.True_, "i": 1})
+    assert out["t"] is True and out["f"] is False and out["n"] is True
+    assert isinstance(out["i"], int) and not isinstance(out["i"], bool)
+    assert '"t": true' in json.dumps(out)
 
 
 def test_the_written_score_reproduces_from_the_recorded_info():

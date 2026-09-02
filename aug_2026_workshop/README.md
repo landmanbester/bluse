@@ -147,6 +147,17 @@ parquet — no need to re-run.
 | `mk_sample_hits` | 15,119 | 894 | 5.913 | 906 |
 | **total** | **2,022,171** | **5,413** | **0.268** | **5,355** |
 
+**`mk_sample_hits`' 894 survivors are almost entirely spurious, and the honest
+survey total is 4,565.** That file is sampled at ~1% of the others' hit
+density, and beam multiplicity is counted *within* a file, so its coincidence
+counts are meaningless. 8,116 of its hits also appear in `lband_long` under the
+same `id`, frequency and beam: the same hit is counted in a mean of **1.87
+beams** there against **29.71** in `lband_long`. Of its 894 survivors, 848 are
+such duplicates — and only **15** of those survive Track A when the surrounding
+hits are present. `all_features.parquet` deduplicates on `id`, so the combined
+table carries 46 mk survivors and 4,565 in total. See
+[`../docs/track-e-2026-09.md`](../docs/track-e-2026-09.md) §7.
+
 Re-run on the repaired 2026-09-02 delivery. Only the `lband_short` row moved:
 `uhf_long` returned 2,281 survivors both before and after, which confirms the
 repair left metadata untouched (Track A is metadata-only). The `was` column is
@@ -559,6 +570,60 @@ The column the local measurement actually indicts is **`f09_temporal_skew`**, at
 column to down-weight for a fast read on whether equalisation would help, and it
 is the real precursor to the deferred scaling spec.
 
+
+## Track E — a morphology-only RFI score
+
+```bash
+bluse-score                  # ~4 min end to end; --no-report scores in ~40 s
+```
+
+Full method, every de-confounding check and what would falsify it:
+[`../docs/track-e-2026-09.md`](../docs/track-e-2026-09.md).
+
+The multi-beam filter is blind on single-beam hits — it needs many beams'
+worth of evidence, and a technosignature is a one-beam hit. Track E takes the
+filter's own verdicts as free labels and learns them from **stamp morphology
+alone**, so the same judgement survives where the filter has nothing to say.
+
+Group 5-fold on `obsid`, 1,599,299 labelled hits, 444 observations:
+
+| feature set | ROC-AUC |
+|---|---:|
+| **12 stamp-morphology columns** | **0.9887** |
+| all 16 features | 0.9884 |
+| metadata only (4) | 0.9839 |
+| Track A's entire flag set | 0.9373 |
+
+Trained only on ≤2 and ≥32 beams, the score orders the untrained 3–31 range
+monotonically across every bin — 422,480 hits, none of them in any training
+fold. It survives dropping the zero-drift rows (0.9903), SNR stratification
+(0.8956), collapsing beam duplicates (0.9822 on singletons) and holding out a
+whole band (0.90–0.99).
+
+### What it produced
+
+| | |
+|---|---|
+| Track A survivors | 4,565 |
+| **called RFI by morphology** (>0.9) | **3,003 — 66%** |
+| uncertain | 1,038 — 23% |
+| shortlist (<0.1) | 524 — 11% |
+
+Two thirds of the vetting list removed with a per-hit reason.
+
+### Three things to know before quoting any of it
+
+1. **A low score is not a candidate.** The labels are positive-unlabelled:
+   `weak_label == 0` means ≤2 beams, not verified clean.
+2. **The 524-hit shortlist is about 10 emitters.** It collapses to ~49
+   distinct (file, 0.1 MHz) groups, the top ten holding 73%. Their stamps show
+   two morphological populations, neither astrophysical: `lband_short` around
+   867.8 MHz with bright first/last time rows in every hit, and `uhf_long` at
+   599–678 MHz with blocky intermittent structure. That is an outlier ranking
+   working, not a detection list.
+3. **`x01_drift_residual` dominates** permutation importance (0.133; next is
+   0.052), independently confirming the mutual-information ranking in
+   `../docs/TODO.md` P1-4.
 
 ## Next
 

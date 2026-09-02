@@ -1,6 +1,6 @@
 # Outstanding work — BLUSE
 
-**Updated:** 2026-09-02, after merging PR #2. One P0 question is OPEN (P0-4).
+**Updated:** 2026-09-03, after Track E. One P0 question is OPEN (P0-4).
 **Purpose:** enough context to resume any item without re-deriving it.
 
 **Data note (2026-09-02):** `lband_short.h5` and `uhf_long.h5` were re-delivered
@@ -328,7 +328,28 @@ no improvement).
 
 ## P3 — longer-standing project backlog, predates this work
 
-- **Track E** — weak-supervision classifier. Still queued.
+- ~~**Track E** — weak-supervision classifier~~ — **DONE 2026-09-03.** Result
+  in [`track-e-2026-09.md`](track-e-2026-09.md). Stamp morphology predicts the
+  spatial filter's verdict at 0.9887 ROC-AUC against Track A's whole flag set
+  at 0.9373, survives every de-confounding check, and prunes 66% of the
+  survivor list. `bluse-score`.
+
+  **New questions it raised, in priority order:**
+  1. **Synthetic injections are now the binding constraint.** Every Track E
+     number measures agreement with the spatial filter, not with truth. An
+     injection harness would give a real objective function and settle whether
+     the monotonicity is physics or an SNR gradient. This was already P2 §6;
+     it is now the highest-value item in the repository.
+  2. **The `contrarian` set** — 3,303 hits in ≥32 beams that score clean.
+     Instrumental, or the model's blind spot? Nobody has looked.
+  3. **The shortlist's two artefact populations** — `lband_short` ~867.8 MHz
+     (bright first/last time rows) and `uhf_long` 599–678 MHz (blocky,
+     intermittent). Both are new; neither is in any RFI table we hold.
+  4. **`f04`/`f06` are individually near-sufficient** (0.9636 / 0.9531 alone)
+     but add ~0.007 each given the rest. That is the P2 redundancy panel's
+     acceptance case arriving from a second direction.
+  5. **Feed the score into Track A as a cut?** Needs an operating point, which
+     needs item 1.
 - **Myburgh filter 6** — continuity along the predicted drift trajectory. Not
   implemented.
 - **Coherent/incoherent test applies an SNR relation to a power ratio.** An
@@ -340,6 +361,14 @@ no improvement).
   rows 1,605,678 → **2,014,055 (+25.4%)**, now exactly matching the team's
   `filtered_hits.csv`. See `aug_2026_workshop/README.md` and AGENTS.md gotcha 7.
 - **Per-antenna voltages** would enable imaging follow-up. Ask.
+- **`mk_sample_hits` is unusable for anything beam-derived.** Measured
+  2026-09-03: 8,116 of its hits also appear in `lband_long` under the same
+  `id`, frequency and beam, counted in a mean of **1.87 beams** there against
+  **29.71** in `lband_long` — it is sampled at ~1% of the hit density and beam
+  coincidence is counted within a file. Its `n_beams`, `beam_frac`,
+  `flag_multibeam` and `weak_label` are all artefacts, and 848 of its 894
+  Track A survivors are duplicates of which only 15 survive when counted
+  properly. Worth telling the BLUSE team.
 - Three unresolved Track A judgement calls: ITU masks, the DTV comb,
   `--tol-steps`. Do not change as a side effect of anything else.
 

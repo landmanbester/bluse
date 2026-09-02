@@ -136,6 +136,63 @@ knowledge-base table plus ITU allocations, in `src/bluse/rfi_masks.py`.
 `bluse-cluster --match` writes `<tag>_families.csv` and `<tag>_candidates.csv`;
 `bluse-explore stamps --rows <tag>_candidates.csv --each-family` plots them.
 
+## RFI score
+
+**A per-hit number saying how much a hit looks like interference**, learned
+from the spatial filter and computed without ever seeing a beam count.
+`bluse-score` writes it as the `rfi_score` column on all 2,014,055 hits.
+
+Precisely: it is the model's estimate of **P(this hit was detected in ≥32
+beams | its 12 stamp-morphology features)**. The spatial filter's verdicts are
+free labels — ≥32 beams is interference, ≤2 beams is confined — so a classifier
+can learn to reproduce them from the stamp alone. It reaches **0.9887 ROC-AUC**
+where Track A's entire hand-built flag set reaches 0.9373.
+
+The reason to want it when `n_beams` is already in the catalogue: **the spatial
+filter is blind on single-beam hits**, and a technosignature is a single-beam
+hit. So is a weak local emitter that only clears threshold at boresight. The
+filter cannot separate them; a score that never looks at beams can be asked.
+
+### Three things the score is not
+
+**It is not a probability that a hit is RFI.** The labels are
+*positive-unlabelled*: `weak_label == 0` means seen in ≤2 beams, **not verified
+clean**. Most single-beam hits are still interference. So a high score is
+strong evidence of RFI — the hit is morphologically indistinguishable from
+signals independently known to be terrestrial — while a low score says only
+that the hit does not resemble this survey's multi-beam RFI.
+
+**A low score is not a candidate.** Measured, on the 524 hits the shortlist
+actually contains: they collapse to about **49 distinct (file, 0.1 MHz)
+groups, the top ten holding 73%**. The shortlist is a handful of persistent
+narrow emitters seen many times over, not 524 independent oddities — and
+looking at their stamps shows two morphological populations, neither of them
+astrophysical. It is an outlier ranking that works, which is a different and
+more useful thing than a detection list.
+
+**It does not transfer to a differently selected hit list.** Pointed at
+`mk_sample_hits` — pre-filtered before delivery, ~25 hits per observation
+against ~2,931 elsewhere — a model trained on the other six files scores 94.2%
+of its nominally-confined hits as RFI, and is *right* to: the same hits appear
+in `lband_long` counted in a mean of 29.71 beams against 1.87 there. Beam
+multiplicity counted on a sparse hit list undercounts, so that file's labels
+are artefacts. Re-check before applying the score to new data — and do not use
+`mk_sample_hits` for anything beam-derived at all.
+
+## Verdict — pruned / uncertain / shortlist
+
+What `bluse-score` calls each **Track A survivor**, by where its score falls:
+
+- **pruned** — score > 0.9. On the survey: **3,003 of 4,565 (66%)**. Hits the
+  classical filter passed that look exactly like multi-beam RFI. The
+  actionable output: two thirds of the vetting list, removed with a reason.
+- **uncertain** — 1,038 (23%). No verdict either way.
+- **shortlist** — score < 0.1. 524 (11%). Read the caveat above before
+  quoting this number.
+
+The thresholds are conventions, not detection criteria; `--shortlist-below`
+and `--pruned-above` move them.
+
 ## The metrics, in one line each
 
 Quoted constantly, so worth pinning down.
@@ -147,6 +204,7 @@ Quoted constantly, so worth pinning down.
 | **median family span** | typical frequency width of a family | full span is max−min, which one outlier dominates. The interquartile range is the honest number: **111.6 MHz vs 9.4 MHz** on the same 40 families |
 | **distance share** | how much one feature contributes to the distance the clusterer sees | the *k-NN* share is the one that matters, not the global one — HDBSCAN responds to local density |
 | **weak label** | provisional RFI / beam-confined tag used for enrichment checks | not ground truth. There is no ground truth in this data yet |
+| **RFI score** | how much one hit looks like multi-beam interference, from stamp morphology alone | positive-unlabelled: high means RFI, low means *unlike this survey's RFI* — never "candidate" |
 
 ## If you read one paragraph
 
@@ -158,3 +216,10 @@ its count is a choice we make rather than a number we discover, and one
 physical emitter can be split across several. The **residue** — families
 matching nothing documented — is what the pipeline exists to produce, and the
 **candidates** are the residue that is also confined to a few beams.
+
+Track E adds a second, independent axis to that chain. Where a family says
+*what kind of signal this is*, the **RFI score** says *how much this one hit
+looks like interference* — learned from the spatial filter, computed without a
+beam count, and therefore still available on the single-beam hits where the
+filter has nothing to say. High is strong evidence of RFI; low is not evidence
+of anything except unusual morphology.
