@@ -1,7 +1,6 @@
 # Outstanding work — BLUSE
 
-**Updated:** 2026-09-02, after closing P0-3 and re-checking everything
-against the repaired data delivery. All P0 items are closed.
+**Updated:** 2026-09-02, after merging PR #2. One P0 question is OPEN (P0-4).
 **Purpose:** enough context to resume any item without re-deriving it.
 
 **Data note (2026-09-02):** `lband_short.h5` and `uhf_long.h5` were re-delivered
@@ -13,7 +12,12 @@ re-calibrated and hold. The retired `lband_short_clean` subset was *biased*
 (26.75% zero-drift against the full file's 46.60%), so per-band results computed
 on it were re-derived.
 
-State: on `main`, clean tree, 68 tests passing (64 + 4 skipped outside a
+**OPEN QUESTION, do not lose (2026-09-02):** the shipped equalising mode does
+not meet its acceptance criterion and **we do not yet know why it cannot be
+reached** — see P0-4 below. Merged in PR #2 on the understanding that this is
+answered later, not dropped.
+
+State: on `main`, clean tree, 102 tests passing (98 + 4 skipped outside a
 workspace). PR #1 merged the Cluster Bench measurement work — three new
 modules (`diagnostics`, `metrics`, `matching`), wiring into both entry points,
 and the repository's first test suite. P0-1 and P0-2 are since closed by
@@ -90,7 +94,66 @@ a physical drift rate.
 
 ---
 
-## P0 — all closed; kept for the reasoning
+## P0 — one open question; the rest kept for the reasoning
+
+### 4. Why can acceptance criterion 1 not be reached? — **OPEN**
+
+The `robust-equalised` mode shipped in PR #2 and **fails its own acceptance
+criterion**. Criterion 1 asked for family ARI ≥0.60 and median family span
+≤120 MHz at 36 families on sband_short. Measured:
+
+| | famARI @36 | median span @36 |
+|---|---:|---:|
+| criterion | ≥0.60 | ≤120 MHz |
+| `robust` baseline | 0.479 | 265.5 MHz |
+| **shipped closed form** | **0.513** | **183.4 MHz** |
+| P0-2's figure, which set the bar | 0.6659 | 78.6 MHz |
+
+(Baseline and closed form averaged over three independent seed triples.)
+
+**What we know.** The bar came from P0-2, which used the iterative k-NN
+strategy on the pre-P0-3 biased estimator. P1-5 then established that strategy
+is **ill-posed**: its target is unattainable for any column with a large tie
+fraction, so `f02` (26.6% tie) is driven to the weight ceiling indefinitely.
+
+**What we have NOT established** — and this is the open question. The leading
+hypothesis is that 0.6659 was reachable only *because* the configuration was
+degenerate: the k-NN chase collapses the metric to ~2 effective dimensions of
+15, and the two survivors are `f02` and `f01_frequency`. If so the bar is an
+artefact twice over — reproducibility rises trivially in 2 dimensions, and
+`median_span_mhz` is a **frequency** statistic being improved by up-weighting
+frequency. But that is inference from the *12-iteration* fit, not a measurement
+of the *6-iteration* configuration that actually produced 0.6659.
+
+**The experiment that settles it, and it is cheap.** Reproduce P0-2's exact
+configuration — 6 iterations, undamped, and the OLD subsampled-index estimator
+(`_shares_knn` before the P0-3 fix, which built its index on the subsample) —
+then report, for that run:
+
+1. effective dimensionality (participation ratio of the squared weights),
+2. the weight on `f01_frequency` and its rank,
+3. famARI and median span, to confirm 0.6659 / 78.6 reproduces at all.
+
+**Falsifiable both ways.** If n_eff ≈ 2 and `f01` is near the top, the target
+was set by a degenerate configuration, is unreachable by any well-posed method,
+and criterion 1 should be retired with that written down. If n_eff is ~10 and
+`f01` is unremarkable, then something real was achieved that the closed form is
+leaving on the table — and the right response is to go and find it, not to
+retire the criterion.
+
+*Where:* `diagnostics.equalising_weights(strategy="knn", iters=6, cap=None)`
+gives the modern fit; the old estimator has to be reconstructed from the P0-3
+write-up, which records exactly what it did. Prior art and the measurement
+harness are in
+[`equalising-scaling-experiment-2026-09.md`](equalising-scaling-experiment-2026-09.md)
+§3–§4 and [`share-knn-threshold-2026-09.md`](share-knn-threshold-2026-09.md) §1.
+
+**Until it is answered:** do not quote 0.6659 as a target, and do not retire
+criterion 1 by assertion.
+
+---
+
+## P0 — closed; kept for the reasoning
 
 ### 1. Restricted gap rule for the matching cut — **DONE 2026-09-01, REJECTED**
 
@@ -218,11 +281,10 @@ averaged over three independent seed triples, against a `robust` baseline of
 31% reduction in median family span, consistent in sign on all three seed
 triples.
 
-The criterion was written from P0-2's 0.6659 / 78.6 MHz. Those figures came
-from the k-NN strategy running on the pre-P0-3 biased estimator, and that
-strategy is now known to be ill-posed, so **the target was never reachable by a
-well-posed method.** Retire the criterion or decline the mode — do not massage
-the result.
+The criterion was written from P0-2's 0.6659 / 78.6 MHz, produced by the k-NN
+strategy on the pre-P0-3 biased estimator. **Why that bar cannot be reached is
+still an open question — see P0-4.** Do not retire the criterion until it is
+answered.
 
 **The k-NN strategy was measured and rejected** despite scoring 0.83 famARI
 against the closed form's 0.51:

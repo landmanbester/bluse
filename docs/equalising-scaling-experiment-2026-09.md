@@ -165,7 +165,16 @@ never a target a well-posed method could hit.
 
 That is a decision for the reader of this document, not for its author. The
 options are to ship the modest but real and well-posed gain, or to ship nothing
-and keep `robust`.
+and keep `robust`. **Resolved 2026-09-02: shipped, with the criterion left
+standing as failed rather than retired.**
+
+**The remaining question is why the bar cannot be reached**, which this document
+does not answer. The leading hypothesis — that 0.6659 was reachable only
+because the configuration was degenerate (n_eff ~2, with `f01_frequency`
+up-weighted and `median_span_mhz` a frequency statistic) — is inference from
+the 12-iteration fit in §3, not a measurement of the 6-iteration configuration
+that actually produced it. Tracked as P0-4 in [`TODO.md`](TODO.md), with the
+experiment that settles it either way.
 
 ## 7. Side findings, recorded not acted on
 

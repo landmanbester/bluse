@@ -174,6 +174,13 @@ negligible.
 
 ## 6. Acceptance
 
+> **OUTCOME (2026-09-02): criterion 1 FAILED and remains open.** The shipped
+> closed form gives 0.513 / 183.4 MHz. Why the bar cannot be reached is *not*
+> established — tracked as P0-4 in [`../../TODO.md`](../../TODO.md) with the
+> experiment that would settle it. Criteria 4a and 6 passed; 4a was corrected
+> during implementation, since bit-identity across two code paths is not an
+> achievable bar.
+
 1. `leaf` + equalised reproduces family ARI ≥0.60 at 36 families and a median
    family span ≤120 MHz on sband_short, against the 0.4888 / 265.0 MHz
    baseline. (The P0-2 figures are 0.6659 / 78.6 MHz; the margin allows for the

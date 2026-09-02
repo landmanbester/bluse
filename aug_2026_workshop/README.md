@@ -524,8 +524,10 @@ triples:
 
 A real but modest gain — +0.034 reproducibility and 31% tighter families,
 consistent in sign on all three seed triples. It does **not** reach the ≥0.60 /
-≤120 MHz bar the spec set, because that bar was derived from a measurement now
-understood to be an artefact.
+≤120 MHz bar the spec set. That bar came from a measurement made with a
+strategy since shown to be ill-posed — but **why it cannot be reached is still
+an open question**, tracked as P0-4 in
+[`../docs/TODO.md`](../docs/TODO.md). Do not treat the bar as retired.
 
 ### Reproducibility is three numbers, never one
 
