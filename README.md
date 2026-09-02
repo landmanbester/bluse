@@ -559,11 +559,21 @@ judgement is available where the filter has nothing to say.
 
 Group 5-fold on `obsid`, 1,599,299 labelled hits, 444 observations:
 
-| | ROC-AUC |
+| feature set | ROC-AUC |
 |---|---:|
 | metadata + stamp (16) | 0.9911 |
 | **12 stamp-morphology features** — the default | **0.9899** |
+| all four metadata columns | 0.9845 |
 | Track A's entire flag set | 0.9373 |
+
+**Read that table carefully.** The tempting claim — "the pixels beat the
+classical filter by 0.053" — misattributes 90% of its own gap. Track A's flags
+are *thresholds* on quantities the metadata holds continuously, and undoing the
+binarisation is worth **+0.047** of the 0.053; morphology adds **+0.005** on
+top. Two honest claims come out of it: the stamp alone carries what the beams
+carry (0.9899 with no frequency, drift or SNR), and **anything downstream that
+consumes Track A's flags should consume the continuous quantities instead** —
+see [§2 and §10](docs/track-e-2026-09.md).
 
 Trained only on ≤2 and ≥32 beams, the score orders the untrained 3–31 range
 monotonically across every bin — 422,480 hits it never saw. It survives

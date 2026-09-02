@@ -595,8 +595,15 @@ Group 5-fold on `obsid`, 1,599,299 labelled hits, 444 observations:
 | Track A's entire flag set | 0.9373 |
 
 The default is the 12-column model even though the 16-column one scores higher:
-it cannot relearn the RFI frequency mask, so "morphology beats the classical
-filter's own flags" is not partly circular with that filter's first cut.
+it cannot relearn the RFI frequency mask, so the claim it supports is not
+partly circular with Track A's own first cut.
+
+**The flag row is not the headline it looks like.** Track A's six booleans are
+thresholds on quantities `meta` holds continuously, and 0.047 of the 0.053 gap
+is the cost of binarising rather than the value of the pixels — see
+[`../docs/track-e-2026-09.md`](../docs/track-e-2026-09.md) §10, which is the
+most directly actionable thing in this work and is about the classical filter,
+not the model.
 
 Trained only on ≤2 and ≥32 beams, the score orders the untrained 3–31 range
 monotonically across every bin — 422,480 hits, none of them in any training

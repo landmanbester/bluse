@@ -8,7 +8,7 @@ presented full-screen with nothing else installed.
 
 Five slides, one claim each:
 
-  1  the result          morphology beats the classical filter's own flags
+  1  the result          the stamp alone carries what the beams carry
   2  why believe it      trained on the ends, correct in the middle
   3  what it gives you   two thirds of the vetting list, with a reason
   4  the honest slide    the shortlist is ten emitters, not 524 candidates
@@ -273,19 +273,22 @@ def build(rep, plots_dir):
 
     s1 = _slide(
         1, 5, "BLUSE / MeerKAT &middot; 2,014,055 narrowband hits",
-        '<h1 class="wide">Twelve numbers from the stamp pixels beat '
-        '<em>the entire classical filter</em></h1>',
+        '<h1 class="wide">The stamp alone tells you '
+        '<em>what the beams tell you</em></h1>',
         f"""<div class="body">
-      <div class="col" style="flex:0 0 41%">
+      <div class="col" style="flex:0 0 40%">
         <p class="lead">The 64-beam spatial filter is this survey's strongest
         discriminant: a signal seen in &ge;32 beams is local interference.</p>
         <p><strong>It is also blind exactly where it matters.</strong> It needs
         many beams' worth of evidence, so it cannot judge a hit seen in one
         beam &mdash; and a technosignature is a one-beam hit. So is a weak
         terrestrial emitter that only clears threshold at boresight.</p>
-        <p>Track E takes the filter's own verdicts as free labels and learns
-        them from <strong>stamp morphology alone</strong>. The same judgement,
-        available where the filter has nothing to say.</p>
+        <p>Twelve numbers computed from the stamp pixels &mdash; no frequency,
+        no drift rate, no SNR &mdash; reproduce the filter's verdict at
+        <strong class="mono">{a['stamp']['roc_auc']:.4f}</strong>, above all
+        four metadata columns together ({a['meta']['roc_auc']:.4f}) and within
+        {a['all']['roc_auc'] - a['stamp']['roc_auc']:.4f} of everything
+        combined.</p>
         <div class="pillrow" style="margin-top:auto">
           <span class="pill">{info['n_train']:,} labelled hits</span>
           <span class="pill">{info['n_groups']} observations</span>
@@ -296,11 +299,24 @@ def build(rep, plots_dir):
       <div class="col grow"><div class="plate">
         <img src="{img('track_e_ablation.png')}"
              alt="Dot plot of ROC-AUC for four feature sets. {alt_ablation}."
-             ></div></div>
+             ></div>
+        <div class="callout" style="border-left-color:var(--accent);
+             background:var(--accent-soft)">
+          <span class="tag" style="color:var(--accent)">a free finding for
+          Track&nbsp;A</span>
+          <p>Most of the gap to the flag row is not the pixels. Track A's six
+          booleans are <em>thresholds</em> on quantities the metadata holds
+          continuously; handing the model the continuous versions is worth
+          <strong>+{a['meta']['roc_auc'] - a['flags']['roc_auc']:.4f}</strong>,
+          nine times what morphology adds on top. Anything downstream that
+          consumes the flags should consume those quantities instead.</p>
+        </div>
+      </div>
     </div>""",
         "<b>Say:</b> the filter is our best tool and it abstains on precisely "
-        "the hits we care about. This is the filter's judgement, made "
-        "available there.")
+        "the hits we care about. The pixels carry the same judgement &mdash; "
+        "and on the way we found 0.047 of AUC your own thresholds are "
+        "discarding.")
 
     s2 = _slide(
         2, 5, "validation &middot; every de-confounding check",
@@ -332,7 +348,7 @@ def build(rep, plots_dir):
     s3 = _slide(
         3, 5, "the deliverable &middot; scores/candidates.csv",
         '<h1 class="wide">Two thirds of the vetting list, '
-        '<em>removed with a reason</em></h1>',
+        '<em>ranked to the bottom</em></h1>',
         f"""<div class="body" style="flex-direction:column;gap:2.2cqw">
       <div class="plate" style="flex:0 0 auto;padding:1.4cqw">
         <img src="{img('track_e_funnel.png')}"
@@ -342,11 +358,12 @@ def build(rep, plots_dir):
         <div class="col" style="flex:0 0 47%">
           <div class="statrow">
             <div class="stat"><span class="v">{ver.get('pruned', 0):,}</span>
-              <span class="k">survivors that look exactly like<br>
-              multi-beam RFI &mdash; removed at zero<br>observational
-              cost</span></div>
+              <span class="k">survivors that look exactly<br>like multi-beam
+              RFI &mdash; vet them<br>last, not first</span></div>
             <div class="stat"><span class="v plain">{surv:,}</span>
-              <span class="k">Track A survivors<br>from {hits:,} hits</span>
+              <span class="k">Track A survivors from<br>{hits:,} hits &mdash;
+              this set is a 5.6&#37;<br>draw, so
+              ~{round(surv / 0.056, -2):,.0f} survey-wide</span>
             </div>
           </div>
         </div>
@@ -362,11 +379,14 @@ def build(rep, plots_dir):
           <span class="mono">file</span>, so
           <span class="mono">bluse-explore stamps --rows</span> plots it with
           no join.</p>
+          <p><strong>This is an ordering, not yet a cut.</strong> Turning it
+          into one needs an operating point, and an operating point needs
+          ground truth we do not have &mdash; see slide 5.</p>
         </div>
       </div>
     </div>""",
-        "<b>Say:</b> this is the number that matters operationally. Not a "
-        "detection &mdash; a two-thirds cut in what a human has to look at.")
+        "<b>Say:</b> the number that matters operationally, and it scales &mdash; "
+        "~81,000 survivors survey-wide. Vetting order, not a delete button.")
 
     s4 = _slide(
         4, 5, "the honest slide &middot; what a low score means",
