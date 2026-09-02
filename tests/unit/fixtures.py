@@ -103,3 +103,45 @@ def synthetic_centroid_space(seed=0):
     labels = np.repeat(np.arange(9), per).astype(np.int32)
     X = np.vstack([c + rng.normal(0, 0.3, (per, 3)) for c in centres])
     return labels, X
+
+
+def synthetic_weak_labelled(n=4000, groups=12, seed=0, sep=1.1):
+    """
+    A weak-labelled feature table for Track E, with every column fit_score reads.
+
+    Two Gaussian blobs separated by `sep` sigma, so the achievable AUC is high
+    but well short of 1.0 -- a fixture that separates perfectly cannot tell a
+    working scorer from one that has leaked the label.
+
+    The label follows the real thing's three-way shape: 1 (>=32 beams),
+    0 (<=2 beams) and -1 (ambiguous, 3-31 beams). The -1 rows sit BETWEEN the
+    two blobs, which is what makes them the interesting test: fit_score must
+    score them without ever training on them.
+
+    `group_id` is assigned round-robin, so every group carries both classes and
+    a GroupKFold split is always feasible.
+    """
+    import sys
+    sys.path.insert(0, "src")
+    from bluse import track_e_score as E
+
+    rng = np.random.default_rng(seed)
+    cols = E.FEATURE_SETS["all"]
+
+    # 40% RFI, 40% confined, 20% ambiguous -- the ambiguous rows halfway between.
+    n_amb = n // 5
+    n_pos = (n - n_amb) // 2
+    n_neg = n - n_amb - n_pos
+    label = np.concatenate([np.ones(n_pos, np.int8), np.zeros(n_neg, np.int8),
+                            -np.ones(n_amb, np.int8)])
+    centre = np.concatenate([np.full(n_pos, sep), np.zeros(n_neg),
+                             np.full(n_amb, sep / 2)])
+
+    X = rng.normal(0.0, 1.0, (n, len(cols))) + centre[:, None]
+    df = pd.DataFrame(X, columns=cols)
+    df["weak_label"] = label
+    df["group_id"] = [f"obs{i % groups:03d}" for i in range(n)]
+    df["file"] = "synthetic"
+    for f in E.FLAG_COLUMNS:
+        df[f] = rng.random(n) < 0.3
+    return df
