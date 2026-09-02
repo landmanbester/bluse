@@ -309,3 +309,76 @@ def test_the_shipped_strategy_actually_equalises():
     share = D._shares(Z * w, np.random.default_rng(0))
     n_eff = 1 / np.sum((share / share.sum()) ** 2)
     assert n_eff > 0.9 * len(w), n_eff
+
+
+# --- P1-5 Task 3: the robust-equalised scaling mode -------------------------
+
+def test_robust_equalised_is_robust_times_the_weights():
+    from bluse import diagnostics as D
+
+    X = np.random.default_rng(0).normal(size=(2000, 4)) * [1, 6, 0.3, 2]
+    base = D.scale(X, "robust")
+    w, _ = D.equalising_weights(base, strategy=D.EQUALISE_STRATEGY,
+                                iters=D.EQUALISE_ITERS, cap=D.EQUALISE_CAP,
+                                with_info=False)
+    assert np.allclose(D.scale(X, "robust-equalised"), base * w)
+
+
+def test_equalised_mode_still_reports_clipping():
+    """
+    audit()'s clip_frac keys on scaling == "robust". The equalised mode has a
+    robust base and clips exactly as much, so omitting it would silently report
+    0.0 -- the same false-negative shape as the --scaling none bug.
+
+    A WIDENED GUARD IS NOT ENOUGH, and this is the trap. clip_frac is measured
+    as (|Z| >= CLIP).mean() on whatever scale() returned, and the equalised
+    mode returns base * w. A value sitting exactly on the clip at +/-5 in the
+    base is no longer at +/-5 after weighting. Measured on this very fixture:
+    clip_frac on the base is 0.050, the weight for column a is 0.661, so the
+    clipped rows land at 3.31 and the threshold test misses every one of them.
+    clip_frac must be computed on the ROBUST BASE, before weights.
+    """
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(4000, 3))
+    X[:200, 0] = 500.0                                # forces the clip
+    rows = {r["col"]: r for r in
+            D.audit(X, list("abc"), scaling="robust-equalised")}
+    assert rows["a"]["clip_frac"] > 0.01
+    assert "clip" in rows["a"]["flags"]
+
+
+def test_clip_frac_matches_the_unweighted_robust_mode():
+    """The clip is a property of the base transform, so both modes must agree."""
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(4000, 3))
+    X[:200, 0] = 500.0
+    a = {r["col"]: r for r in D.audit(X, list("abc"), scaling="robust")}
+    b = {r["col"]: r for r in
+         D.audit(X, list("abc"), scaling="robust-equalised")}
+    for c in "abc":
+        assert a[c]["clip_frac"] == pytest.approx(b[c]["clip_frac"])
+
+
+def test_scale_honours_column_kinds():
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    X = np.column_stack([rng.normal(0, 3, 2000), rng.normal(0, 1, 2000),
+                         (rng.random(2000) < 0.27).astype(float)])
+    cols = ["a", "b", "is_x"]
+    Z = D.scale(X, "robust-equalised", kinds={"is_x": "boolean"}, columns=cols)
+    base = D.scale(X, "robust")
+    assert np.allclose(Z[:, 2], base[:, 2])           # weight exactly 1.0
+
+
+def test_unknown_scaling_raises_instead_of_silently_meaning_none():
+    """A typo'd mode used to fall through to `return X`, i.e. silently 'none'."""
+    from bluse import diagnostics as D
+
+    with pytest.raises(ValueError, match="scaling"):
+        D.scale(np.zeros((10, 2)), "robsut")
+    assert D.scale(np.ones((10, 2)), "none").shape == (10, 2)

@@ -69,7 +69,7 @@ def robust_stats(X):
     return {"median": np.median(X, axis=0), "iqr": q75 - q25}
 
 
-def scale(X, how, stats=None):
+def scale(X, how, stats=None, *, kinds=None, columns=None):
     """
     Equalise how much each feature contributes to the Euclidean distance.
 
@@ -78,9 +78,22 @@ def scale(X, how, stats=None):
 
       "robust"    centre on the median, divide by the IQR, clip to +/-CLIP.
       "quantile"  rank-transform every feature to a uniform distribution.
+      "robust-equalised"
+                  robust, then per-column weights that equalise each column's
+                  contribution to the distance. Robust equalises the IQR, but
+                  HDBSCAN responds to VARIANCE and the ratio between them
+                  depends on distribution shape, so contributions run 1.7% to
+                  24.3% globally against an equal share of 6.7%. See
+                  equalising_weights, and
+                  docs/equalising-scaling-experiment-2026-09.md for why the
+                  shipped strategy is the closed form rather than the k-NN one
+                  that scored higher.
       "none"      GLOBULAR's literal spec -- their transforms are applied
                   upstream in features.normalise(), so "none" means "the
                   paper's preprocessing and nothing further".
+
+    `kinds`/`columns` are used only by "robust-equalised", to keep boolean and
+    flag columns at weight exactly 1.0.
 
     `stats` is an optional {"median", "iqr"} from robust_stats(), so the fit
     can come from a different row set than the transform. The Bench uses it to
@@ -88,20 +101,37 @@ def scale(X, how, stats=None):
     the fit is on whatever is passed, which is what the CLI wants.
     """
     X = np.array(X, copy=True)
-    if how == "robust":
+    if how in ("robust", "robust-equalised"):
         if stats is None:
             stats = robust_stats(X)
         med = np.asarray(stats["median"])
         iqr = np.asarray(stats["iqr"])
         iqr = np.where(iqr > 1e-12, iqr, 1.0)
-        return np.clip((X - med) / iqr, -CLIP, CLIP)
+        base = np.clip((X - med) / iqr, -CLIP, CLIP)
+        if how == "robust":
+            return base
+        # with_info=False deliberately: the achieved-deviation diagnostic calls
+        # _shares_knn, which costs 1,311 ms on sband_short against 1.7 ms for
+        # the weights, and scale() runs once per clustering run, once per Bench
+        # rail render and once per stability seed.
+        w, _ = equalising_weights(base, kinds=kinds, columns=columns,
+                                  strategy=EQUALISE_STRATEGY,
+                                  iters=EQUALISE_ITERS, cap=EQUALISE_CAP,
+                                  with_info=False)
+        return base * w
     if how == "quantile":
         from sklearn.preprocessing import QuantileTransformer
         qt = QuantileTransformer(output_distribution="uniform",
                                  n_quantiles=min(1000, len(X)),
                                  subsample=200_000, random_state=0)
         return qt.fit_transform(X)
-    return X
+    if how == "none":
+        return X
+    # Previously any unrecognised value fell through to `return X`, so a typo'd
+    # mode silently meant "none" -- the quietest possible way to run the wrong
+    # experiment.
+    raise ValueError(f"unknown scaling {how!r}; expected one of "
+                     f"robust, robust-equalised, quantile, none")
 
 
 def _shares(Z, rng, n_pairs=4000):
@@ -294,7 +324,25 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
     kinds = kinds or {}
     rng = np.random.default_rng(seed)
 
-    Z = scale(raw, scaling)
+    # clip_frac must come from the ROBUST BASE. Under "robust-equalised" the
+    # returned matrix is base * w, so a value sitting exactly on the +/-5 clip
+    # is no longer there after weighting and the threshold test misses it --
+    # measured, a weight of 0.661 moves a clipped row to 3.31 and clip_frac
+    # reads 0.000 for a mode that clips 5% of the column. Building the base
+    # here also avoids scaling twice.
+    base = None
+    if scaling in ("robust", "robust-equalised"):
+        base = scale(raw, "robust")
+        if scaling == "robust":
+            Z = base
+        else:
+            w, _ = equalising_weights(base, kinds=kinds, columns=columns,
+                                      strategy=EQUALISE_STRATEGY,
+                                      iters=EQUALISE_ITERS, cap=EQUALISE_CAP,
+                                      with_info=False)
+            Z = base * w
+    else:
+        Z = scale(raw, scaling)
     q75r, q25r = np.percentile(raw, [75, 25], axis=0)
     iqr_raw = q75r - q25r
     q75s, q25s = np.percentile(Z, [75, 25], axis=0)
@@ -314,8 +362,8 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
         # Only "robust" clips. Under "none"/"quantile" this test would flag
         # any raw value with magnitude >= 5, which is not a clip at all --
         # `bluse-cluster --report --scaling none` reported false clips.
-        clip_frac = (float((np.abs(Z[:, i]) >= CLIP - 1e-12).mean())
-                     if scaling == "robust" else 0.0)
+        clip_frac = (float((np.abs(base[:, i]) >= CLIP - 1e-12).mean())
+                     if base is not None else 0.0)
 
         flags = []
         if kind in ("continuous", "ordinal") and tie > TIE_FLAG:
