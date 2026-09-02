@@ -24,51 +24,64 @@ workspace resolves here automatically.
 
 ## Which data files to use
 
-**Prefer a `*_clean.h5` file over the same-named original, always.**
-
-Two of the original files contain a contiguous block of corrupt stamp cubes
-that raise `OSError: wrong B-tree signature` — a bad transfer, not truncation.
-Replacements are arriving with those rows stripped out.
+**All seven, as delivered.** The corrupt stamp cubes were repaired by the BLUSE
+team on 2026-09-02; there is no longer a `*_clean.h5` file and one should not be
+re-introduced.
 
 | file | use it? | why |
 |---|---|---|
-| `lband_short_clean.h5` | **yes** | 463,625 rows, reads clean end to end |
-| `lband_short.h5` | no — superseded | 866,002 rows, but 46.65% of the stamps are unreadable |
-| `uhf_long.h5` | yes, for now | still has 6,000 bad rows (264,000–270,000); no clean version yet |
+| `lband_short.h5` | **yes** | 866,002 rows, 0 bad blocks, 100% usable |
+| `uhf_long.h5` | **yes** | 299,878 rows, 0 bad blocks, 100% usable |
 | the other five | yes | never had corruption |
 
-The clean file's *rows* are a strict subset of the original's by hit `id` —
-same 26 columns, same schema, nothing altered, 402,377 unreadable rows removed.
-Only the stamp cubes were ever affected; every metadata column reads fine in
-both, which is why the Track A catalogues were always trustworthy. (Its Track A
-*survivors* are a different matter — see the results table below.)
+Verify any future delivery the same way — `bluse-explore info` names any file
+with bad blocks, and extraction reports usable rows per file.
 
-Two practical notes:
+### What the repair changed
 
-- **It reads 4.4× faster in bulk** (103,662 vs 23,717 rows/s) because it is
-  stored uncompressed. Individual scattered stamp reads are a little slower
-  (~0.4 ms vs ~0.0 ms), so `explore.py stamps --sort snr` will feel marginally
-  less snappy while feature extraction gets much quicker.
-- **Don't let both versions into one run.** `track_b_features.py` with no
-  arguments globs `data/*.h5` and would ingest the old and the clean file as
-  two datasets covering the same hits — and the *corrupt* one would win the
-  tie-break, because it has more rows (866,002, of which 404,000 have no
-  readable stamp) than the clean file's 463,625. `drop_superseded()` now
-  removes any `X` whenever `X_clean` is present and prints what it dropped, so
-  this is safe by default. Still cleanest to move the original aside.
+Two of the original files carried a contiguous block of corrupt stamp cubes
+raising `OSError: wrong B-tree signature` — a bad transfer, not truncation:
+`lband_short.h5` rows 338,000–742,000 and `uhf_long.h5` rows 264,000–270,000.
+Only stamps were ever affected; every metadata column always read fine, which
+is why the Track A catalogues were always trustworthy. An interim
+`lband_short_clean.h5` with the 402,377 unreadable rows stripped stood in for
+the original until the repair.
 
-Track A has already been re-run on the clean file, so
-`catalogues/lband_short_clean_cat.parquet` exists and feature extraction will
-not stop for it (670 survivors, 0.145% — see the Track A results table for why
-that is not simply a subset of the original's 1,015).
+| | before | after |
+|---|---:|---:|
+| usable rows, whole survey | 1,605,678 | **2,014,055** (+25.4%) |
+| `lband_short` | 463,625 (as `_clean`) | **866,002** (+86.8%) |
+| `uhf_long` | 293,878 | **299,878** (+6,000) |
+| rows failing `feature_ok` | 6,000 | **0** |
 
-To re-run the pipeline on the corrected set:
+The new total is exactly the row count of the team's own `filtered_hits.csv`
+(2,014,055), which is a useful independent check that nothing is missing.
+
+**The retired clean file was a biased subset of its band.** Its zero-drift
+fraction was 26.75% against the full file's 46.60%, because the stripped region
+was disproportionately zero-drift. Any per-band result computed on
+`lband_short_clean` is drawn from a skewed sample. The Track A results table
+below has already been re-derived on the repaired file.
+
+**Don't let a stale copy into a run.** `bluse-features` with no arguments globs
+`data/*.h5`, and `--combine-only` globs `features/*_features.parquet`, so a
+leftover `lband_short_clean_features.parquet` is still picked up.
+`drop_superseded()` keeps whichever of the pair carries more *usable* rows and
+prints what it dropped — it used to prefer `_clean` by name, which after the
+repair would have discarded 402,377 good rows. Delete superseded per-file
+parquets anyway rather than relying on the guard.
+
+To re-run the pipeline after a re-delivery:
 
 ```bash
-mkdir -p data/superseded && mv data/lband_short.h5 data/superseded/
-bluse-features                             # now picks up *_clean.h5 only
-bluse-cluster                              # all_features.parquet
+bluse-track-a data/lband_short.h5 data/uhf_long.h5   # catalogues first
+bluse-features data/lband_short.h5 data/uhf_long.h5  # then features
+bluse-features --combine-only                        # rebuild all_features
 ```
+
+That last step matters: `bluse-features <files>` rebuilds `all_features.parquet`
+from **only the files it just extracted**, so without it the combined table
+silently shrinks to those files alone.
 
 ## Setup
 
@@ -126,17 +139,23 @@ parquet — no need to re-run.
 | File | Hits | Survivors | % | was |
 |---|---:|---:|---:|---:|
 | `lband_long` | 557,690 | 568 | 0.102 | 853 |
-| `lband_short_clean` | 463,625 | 740 | 0.160 | 928 |
+| `lband_short` | 866,002 | 798 | 0.092 | 740 |
 | `uhf_long` | 299,878 | 2,281 | 0.761 | 2,406 |
 | `uhf_short` | 208,774 | 786 | 0.376 | 1,870 |
 | `sband_long` | 36,132 | 43 | 0.119 | 47 |
 | `sband_short` | 38,576 | 43 | 0.111 | 46 |
 | `mk_sample_hits` | 15,119 | 894 | 5.913 | 906 |
-| **total** | **1,619,794** | **5,355** | **0.331** | **7,056** |
+| **total** | **2,022,171** | **5,413** | **0.268** | **5,355** |
 
-The total is over the corrected set (`lband_short_clean`, not `lband_short`).
-The `was` column is the same set before the 2026-09 corrections below, so it is
-comparable row by row.
+Re-run on the repaired 2026-09-02 delivery. Only the `lband_short` row moved:
+`uhf_long` returned 2,281 survivors both before and after, which confirms the
+repair left metadata untouched (Track A is metadata-only). The `was` column is
+the pre-repair set, where `lband_short_clean` stood in for `lband_short`.
+
+**`lband_short` gained 58 survivors but its survival *rate* halved** (0.160% →
+0.092%): the 402,377 recovered rows are dominated by hits the chain removes —
+91.3% fall in the known-RFI mask against 89.9% before, and the zero-drift cut
+flags 46.6% against 26.8%. The clean subset was not representative of its band.
 
 ### What changed in 2026-09, and why
 
@@ -153,9 +172,10 @@ too tightly, under-counting how many beams carried each hit and letting
 multi-beam RFI through as survivors.
 
 **2. There was no maximum drift-rate cut.** We implemented §3.2's zero-drift
-rule but never its upper bound. It is not inert: it flags 12,756 hits in
-`lband_short_clean` (2.75%) and 1,134 in `uhf_short` (0.54%), and nothing
-anywhere else. The limit scales with observing frequency at 4.18e-4 Hz/s per
+rule but never its upper bound. It is not inert: it flags 14,306 hits in
+`lband_short` (1.65%) and 1,134 in `uhf_short` (0.54%), and nothing anywhere
+else. (Re-derived on the repaired file; it was 12,756 / 2.75% on the retired
+`lband_short_clean` subset.) The limit scales with observing frequency at 4.18e-4 Hz/s per
 MHz, which reproduces all three anchor values the paper quotes.
 
 *Caveat, recorded in the code:* that coefficient bounds Earth's rotation
@@ -188,11 +208,11 @@ more things.
 **The maximum drift cut is now OFF by default.** Myburgh et al. search
 ±50 Hz/s deliberately, "as many of our targets are toward unknown planetary
 systems". So are ours. Worse, our K2-18-derived limit was biting *inside* the
-range `seticore` actually searched: on `lband_short_clean` it lands at
-0.358–0.402 Hz/s against an observed maximum of 0.4203, with 4,257 hits at the
-extreme `driftSteps` — exactly where a fast-drifting real signal would sit. In a
-blind survey a false negative costs more than one more waterfall to inspect.
-`--max-drift-coeff 4.18e-4` restores it. (`lband_short_clean` 670 → 740.)
+range `seticore` actually searched: on `lband_short` it lands at 0.358–0.402
+Hz/s against an observed maximum of 0.4203 — exactly where a fast-drifting real
+signal would sit. In a blind survey a false negative costs more than one more
+waterfall to inspect. `--max-drift-coeff 4.18e-4` restores it, and on the
+repaired file it costs 70 survivors (798 → 728).
 
 **A duration-conditioned SNR floor is now ON.** Their filter 3 requires SNR > 15
 for hits with fewer than 16 time samples, because `seticore`'s noise estimate
@@ -258,7 +278,8 @@ on `id`; anything else that pools files must do the same.
   from the `_long` files rather than pooling.
 - **`uhf_long.h5` still has no clean replacement.** Rows 264,000–270,000 (2.00%)
   remain unreadable, so ~6,000 stamps are still lost there. Worth asking for a
-  re-copy of that one too, on the same terms as `lband_short_clean.h5`.
+  re-copy of that one too, on the same terms as `lband_short.h5`. **Answered
+  2026-09-02** — both files were re-delivered repaired.
 - **Hits-per-beam steps at beams ~49/~55 — explained, benign.** One beam per
   target, filled from 0, and sparse sky has fewer targets. `bluse-explore
   beams <file>` shows it. Catalogues now carry `n_beams_formed` and `beam_frac`

@@ -24,7 +24,7 @@ does not bind for this design.
 | file | rows | zero-drift | levels | step (Hz/s) | max |
 |---|---:|---:|---:|---:|---:|
 | lband_long | 557,690 | 46.55% | 50 | 0.00504 | 0.3329 |
-| lband_short_clean | 463,625 | 26.75% | 42 | 0.01025 | 0.4203 |
+| lband_short | 866,002 | 46.60% | 42 | 0.01025 | 0.4203 |
 | mk_sample_hits | 15,119 | **0.00%** | 42 | 0.00504 | 0.2472 |
 | sband_long | 36,132 | 32.95% | 42 | 0.00527 | 0.2161 |
 | sband_short | 38,576 | 33.55% | 42 | 0.01071 | 0.4391 |
@@ -33,7 +33,15 @@ does not bind for this design.
 
 The lattice is exact — values are precisely k × step for k = 0…41 — and the
 step spans 5.25× across files, confirming `driftSteps` is a per-file index that
-is not comparable across files. **`mk_sample_hits` has no zero-drift hits at
+is not comparable across files.
+
+> **Updated 2026-09-02** for the repaired `lband_short.h5` and `uhf_long.h5`.
+> Only the `lband_short` row moved, and only in rows and zero-drift fraction
+> (463,625 / 26.75% on the retired `_clean` subset → 866,002 / 46.60% on the
+> full file — the stripped region was disproportionately zero-drift). Every
+> lattice constant is unchanged, so the conclusions drawn from this table
+> stand. All the clustering in this document is on `sband_short`, whose feature
+> parquet is byte-identical before and after the repair. **`mk_sample_hits` has no zero-drift hits at
 all**, so a zero-drift indicator is a constant column there.
 
 On the 34,933 sband_short rows reaching the clusterer the tie is 26.62%,

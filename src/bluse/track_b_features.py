@@ -238,17 +238,22 @@ def scan_bad_regions(data, n, probe=2000):
     """
     Find unreadable regions of the stamp cube cheaply.
 
-    This delivery contains corrupt HDF5 regions -- lband_short.h5 rows
-    338,000-742,000 and uhf_long.h5 rows 264,000-270,000 (see AGENTS.md). Hitting
-    one raises OSError mid-read. Probing a single row per block costs a few
-    hundred reads instead of re-reading the file, and the per-row fallback in
-    the main loop catches anything a block probe misses.
+    The original delivery contained corrupt HDF5 regions -- lband_short.h5 rows
+    338,000-742,000 and uhf_long.h5 rows 264,000-270,000. Hitting one raises
+    OSError mid-read. Probing a single row per block costs a few hundred reads
+    instead of re-reading the file, and the per-row fallback in the main loop
+    catches anything a block probe misses.
 
-    PREFER data/lband_short_clean.h5 OVER data/lband_short.h5 -- the clean file
-    has those rows stripped and scans with zero bad blocks. This function is
-    still needed for uhf_long.h5, which has no clean replacement yet. Note that
-    probing every 2,000 rows over-skips at the edges of a bad region: the clean
-    file keeps 1,623 rows that this function discards.
+    FIXED 2026-09-02: the BLUSE team re-delivered both files. Both now scan
+    with zero bad blocks and extract at 100% usable rows -- lband_short.h5 at
+    866,002 (against the retired lband_short_clean.h5's 463,625) and
+    uhf_long.h5 at 299,878 (against 293,878). Use lband_short.h5 directly; the
+    _clean copy is superseded and should not be re-introduced.
+
+    This function is kept as cheap insurance, not because a known defect
+    remains: it costs a few hundred reads and would catch a future bad
+    delivery. Note it over-skips at the edges of a bad region -- on the old
+    data the clean file kept 1,623 rows this discarded.
 
     Returns a boolean mask, True where the row is expected to be readable.
     """
@@ -334,28 +339,47 @@ def deduplicate(all_df):
 
 def drop_superseded(all_df):
     """
-    Never let a corrupt original outvote its *_clean replacement.
+    Where a file and its *_clean twin are both present, keep whichever carries
+    more USABLE rows.
 
-    deduplicate() ranks files by row count, and the corrupt original WINS that
-    contest: lband_short.h5 yields 866,002 feature rows (404,000 of them with
-    stamp_ok=False, since metadata features are computed even where the stamp
-    cube is unreadable) against lband_short_clean.h5's 463,625. Pooling both
-    would therefore silently swap 463,625 good rows for 462,002 good ones plus
-    404,000 stamp-less ones -- the exact opposite of the intent.
+    deduplicate() ranks files by total row count, which is the wrong contest
+    when one of the pair is a corrupt original: metadata features are computed
+    even where the stamp cube is unreadable, so the corrupt file wins on raw
+    rows while carrying fewer real ones.
 
-    So the *_clean file wins by name, before row counts are consulted.
+    THIS RULE USED TO PREFER *_clean BY NAME, and that was right until
+    2026-09-02, when the BLUSE team re-delivered lband_short.h5 and uhf_long.h5
+    with the corrupt regions repaired. The repaired lband_short.h5 carries
+    866,002 usable rows against the retired clean copy's 463,625, so a stale
+    lband_short_clean_features.parquet left in the features directory would
+    have silently discarded 402,377 good rows -- the failure this function
+    exists to prevent, with the sign reversed.
+
+    Counting usable rows makes the same decision in the old world (clean
+    463,625 against the corrupt original's 462,002 stamp-bearing rows) and the
+    right one in the new, without depending on which delivery is on disk.
     """
     if "file" not in all_df.columns:
         return all_df
     present = set(all_df["file"].unique())
-    superseded = {f for f in present if f + "_clean" in present}
-    if not superseded:
+    pairs = [(f, f + "_clean") for f in present if f + "_clean" in present]
+    if not pairs:
         return all_df
-    for f in sorted(superseded):
-        n = int((all_df["file"] == f).sum())
-        print(f"  dropping {n:,} rows from '{f}' -- superseded by "
-              f"'{f}_clean' (see AGENTS.md gotcha 7)")
-    return all_df[~all_df["file"].isin(superseded)].reset_index(drop=True)
+
+    def usable(f):
+        m = all_df["file"] == f
+        return int((all_df.loc[m, "feature_ok"]).sum()
+                   if "feature_ok" in all_df.columns else m.sum())
+
+    drop = []
+    for base, clean in pairs:
+        loser = base if usable(base) < usable(clean) else clean
+        winner = clean if loser == base else base
+        drop.append(loser)
+        print(f"  dropping {int((all_df['file'] == loser).sum()):,} rows from "
+              f"'{loser}' ({usable(loser):,} usable) -- superseded by "
+              f"'{winner}' ({usable(winner):,} usable)")
+    return all_df[~all_df["file"].isin(drop)].reset_index(drop=True)
 
 
 def summarise(frames, outdir, dedupe=True):

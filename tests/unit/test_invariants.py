@@ -103,3 +103,49 @@ def test_epoch_trace_is_returned():
                                  4, 8, 3, 200, 0)
     assert len(trace) >= 1
     assert all(isinstance(t, int) for t in trace)
+
+
+def test_superseded_prefers_the_file_with_more_usable_rows():
+    """
+    The rule that replaced a name-based one, after the BLUSE team re-delivered
+    lband_short.h5 and uhf_long.h5 without the corrupt regions (2026-09-02).
+
+    The old rule preferred `<name>_clean` BY NAME. That was right while the
+    original was corrupt and wrong the moment it was fixed: the repaired
+    lband_short.h5 yields 866,002 usable rows, so a stale
+    lband_short_clean_features.parquet left in the features directory would
+    have silently discarded 402,377 good rows -- the exact failure the rule
+    exists to prevent, with the sign flipped.
+
+    Preferring whichever file carries more USABLE rows makes the same decision
+    in the old world (clean 463,625 against the corrupt original's 462,002
+    stamp-bearing rows) and the right one in the new.
+    """
+    import pandas as pd
+
+    from bluse.track_b_features import drop_superseded
+
+    # New world: the repaired original is complete, the _clean copy is stale.
+    df = pd.DataFrame({
+        "file": ["lband_short"] * 900 + ["lband_short_clean"] * 400,
+        "feature_ok": [True] * 900 + [True] * 400,
+    })
+    kept = set(drop_superseded(df.copy())["file"].unique())
+    assert kept == {"lband_short"}, kept
+
+    # Old world: the original is mostly stamp-less, so the _clean copy wins.
+    df = pd.DataFrame({
+        "file": ["lband_short"] * 900 + ["lband_short_clean"] * 400,
+        "feature_ok": [True] * 300 + [False] * 600 + [True] * 400,
+    })
+    kept = set(drop_superseded(df.copy())["file"].unique())
+    assert kept == {"lband_short_clean"}, kept
+
+
+def test_superseded_is_a_no_op_without_a_clean_twin():
+    import pandas as pd
+
+    from bluse.track_b_features import drop_superseded
+
+    df = pd.DataFrame({"file": ["sband_short"] * 10, "feature_ok": [True] * 10})
+    assert len(drop_superseded(df.copy())) == 10

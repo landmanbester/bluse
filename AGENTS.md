@@ -52,7 +52,6 @@ aug_2026_workshop/               THE WORKSPACE. Data in, results out.
   README.md                      workflow, Track A results, open decisions
   brainstorming.md               technique survey + Tracks A-E plan
   data/                          HDF5 files + filtered_hits.csv (untracked).
-                                 Prefer *_clean.h5 -- see gotcha 7.
   catalogues/                    Track A output (.csv tracked, .parquet not)
   features/                      Track B feature matrices (untracked, ~350 MB)
   clusters/                      Track B clustering output
@@ -131,8 +130,8 @@ its `requirements.txt`.
 
 ## The data
 
-Seven HDF5 files, **1,619,794 hits**, 21 GB (2,022,171 before `lband_short.h5`
-was superseded by `lband_short_clean.h5` -- gotcha 7). Seticore "stamp" output flattened to
+Seven HDF5 files, **2,022,171 hits**, 21 GB (2,014,055 after de-duplicating
+`mk_sample_hits` on `id` -- gotcha 5). Seticore "stamp" output flattened to
 a columnar table: one row per narrowband detection, ~26 scalar metadata columns
 plus a `data` cube of time-frequency cutouts. Each row is therefore both a
 feature vector and an image.
@@ -140,8 +139,7 @@ feature vector and an image.
 | File | Hits | Cube | Duration | Δf | Band |
 |---|---:|---|---:|---:|---|
 | `lband_long` | 557,690 | (n,1,57,120) | 286.0 s | 1.59 Hz | 855.7–1702.8 MHz |
-| `lband_short_clean` ✅ | 463,625 | (n,1,24,120) | 120.4 s | 1.59 Hz | 856.0–962.7 MHz |
-| `lband_short` ⛔ superseded | 866,002 | (n,1,24,120) | 120.4 s | 1.59 Hz | 856.0–1068.0 MHz |
+| `lband_short` ✅ | 866,002 | (n,1,24,120) | 120.4 s | 1.59 Hz | 856.0–1068.0 MHz |
 | `uhf_long` | 299,878 | (n,1,36,120) | 284.2 s | 1.01 Hz | 543.9–1080.0 MHz |
 | `uhf_short` | 208,774 | (n,1,15,120) | 118.4 s | 1.01 Hz | 544.0–679.8 MHz |
 | `sband_long` | 36,132 | (n,1,59,120) | 289.6 s | 1.63 Hz | 1968.8–2825.0 MHz |
@@ -228,44 +226,46 @@ across the whole delivery and stable between the HDF5 files and
    The default augmentation lists in the literature are written for galaxy images
    and are actively wrong here.
 
-7. **Corrupt stamp cubes — ALWAYS PREFER A `*_clean.h5` FILE WHERE ONE EXISTS.**
-   Verified by block-scanning `data`: `lband_short.h5` rows
-   **338,000–742,000** (46.65%) and `uhf_long.h5` rows **264,000–270,000**
-   (6,000 rows, 2.00%) raise `OSError: wrong B-tree signature`. Each is a
-   single contiguous mid-file region with a readable tail — the signature of a
-   bad transfer, not truncation. **Metadata columns are unaffected**, so Track
-   A (metadata-only) is complete and correct on either version; Track B loses
-   those stamps and marks them `stamp_ok=False`.
+7. **Corrupt stamp cubes — FIXED 2026-09-02, and the old advice is now
+   INVERTED.** The BLUSE team re-delivered `lband_short.h5` and `uhf_long.h5`
+   with the corrupt regions repaired. Both now block-scan with **zero** bad
+   blocks and extract at **100% usable rows**. Use the plain files. There is no
+   longer a `*_clean.h5` anywhere, and one should not be re-introduced.
 
    | file | status |
    |---|---|
-   | `lband_short_clean.h5` | **use this**; 463,625 rows, 0 bad blocks |
-   | `lband_short.h5` | superseded — 866,002 rows, 201/434 probes bad |
-   | `uhf_long.h5` | **still corrupt, no clean version yet** |
+   | `lband_short.h5` | **use this**; 866,002 rows, 0 bad blocks, 100% usable |
+   | `uhf_long.h5` | **use this**; 299,878 rows, 0 bad blocks, 100% usable |
+   | `lband_short_clean.h5` | retired; was 463,625 rows, now deleted |
    | the other five | never had corruption |
 
-   `lband_short_clean.h5` is a strict subset by `id`: 402,377 unreadable rows
-   stripped, all 26 datasets and the schema unchanged, `numTimesteps` still 24,
-   `numChannels` still 79–120, `incoherentPower` still all-zero. It recovers
-   1,623 rows *more* than skipping the block wholesale did, because
-   `scan_bad_regions()` probes every 2,000 rows and so over-skips at the edges.
+   *History, because the repaired files must not be confused with the old
+   ones.* Block-scanning `data` used to fail on `lband_short.h5` rows
+   **338,000–742,000** (46.65%) and `uhf_long.h5` rows **264,000–270,000**
+   (2.00%) with `OSError: wrong B-tree signature` — a single contiguous
+   mid-file region with a readable tail, the signature of a bad transfer rather
+   than truncation. Metadata was never affected, so Track A was always complete
+   and correct; only Track B lost those stamps, marking them `stamp_ok=False`.
+   `lband_short_clean.h5` was a strict subset by `id` with the 402,377
+   unreadable rows stripped.
 
-   **Hazard when re-running — now guarded, but understand it.** A bare
-   `track_b_features.py` globs `data/*.h5` and would ingest `lband_short.h5`
-   *and* `lband_short_clean.h5` as two datasets covering the same hits.
-   `deduplicate()` ranks files by row count, and **the corrupt original wins
-   that contest**: it yields 866,002 feature rows (404,000 with
-   `stamp_ok=False`, because metadata features are computed even where the
-   stamp cube is unreadable) against the clean file's 463,625. Pooling both
-   would silently trade 463,625 good rows for 462,002 good plus 404,000
-   stamp-less ones.
+   **What the repair changed.** Usable rows across the survey went
+   1,605,678 → **2,014,055 (+25.4%)**, which is now exactly the row count of
+   the team's own `filtered_hits.csv`. `lband_short` gained 402,377 rows
+   (463,625 → 866,002, +86.8%) and `uhf_long` the 6,000 it was missing. The
+   retired clean file was also a **biased** subset of its band: 26.75%
+   zero-drift against the full file's 46.60%, because the stripped region was
+   disproportionately zero-drift. Treat any per-band result computed on
+   `lband_short_clean` as drawn from a skewed sample.
 
-   `drop_superseded()` now removes any `X` when `X_clean` is also present,
-   **by name, before row counts are consulted**, and says so on stdout. Still
-   prefer to move superseded originals out of `data/` — and note that
-   `--combine-only` globs `features/*_features.parquet`, so a stale
-   `lband_short_features.parquet` left on disk is picked up too (the guard
-   catches it, but delete it and avoid the question).
+   **The de-duplication hazard survived the fix, with its sign reversed.** A
+   bare `bluse-features` globs `data/*.h5`, and `--combine-only` globs
+   `features/*_features.parquet`, so a stale `lband_short_clean_features.parquet`
+   left on disk is still picked up. `drop_superseded()` used to prefer `_clean`
+   **by name**, which after the repair would have silently discarded 402,377
+   good rows. It now keeps whichever file carries more **usable** rows, which
+   gives the same answer on the old data and the right one on the new. Delete
+   superseded per-file parquets anyway rather than relying on the guard.
 
    Keep `scan_bad_regions()` regardless: `uhf_long.h5` still needs it.
 
@@ -277,16 +277,18 @@ across the whole delivery and stable between the HDF5 files and
    multi-beam RFI. This is the cut behaving correctly — but it means survivor
    sets from different row sets must not be compared hit-for-hit.
 
-8. **Compression differs between the original and clean deliveries, and it
-   inverts the access pattern.** The six original band files are gzip-chunked
-   at one stamp per chunk (`chunks=(1,1,24,120)`): random single-stamp access
-   is cheap, bulk reads are CPU-bound on decompression. `lband_short_clean.h5`
-   is **uncompressed** with `chunks=(128,1,3,30)`. Measured: sequential batched
-   reads **103,662 rows/s vs 23,717 (4.4× faster)**, which is what feature
-   extraction does; single random-row reads are ~0.4 ms against ~0.0 ms, so
-   `explore.py stamps` on scattered rows is slower. Expect extraction over the
-   clean file to be markedly quicker despite no compression.
-   `mk_sample_hits.h5` is uncompressed and contiguous.
+8. **All six band files are gzip-chunked at one stamp per chunk**
+   (`chunks=(1,1,T,120)`): random single-stamp access is cheap, bulk reads are
+   CPU-bound on decompression. `mk_sample_hits.h5` is uncompressed and
+   contiguous. Verified on the 2026-09-02 re-delivery — the repaired
+   `lband_short.h5` and `uhf_long.h5` kept the original chunking.
+
+   *No longer applicable:* the retired `lband_short_clean.h5` was
+   **uncompressed** with `chunks=(128,1,3,30)`, which inverted the access
+   pattern — sequential batched reads 103,662 rows/s against 23,717 (4.4×
+   faster), single random-row reads ~0.4 ms against ~0.0 ms. Nothing on disk
+   has that layout now, so extraction is uniformly decompression-bound again;
+   the repaired 866,002-row `lband_short.h5` extracts in 90 s.
 
 ## Conventions
 

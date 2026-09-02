@@ -1,9 +1,19 @@
 # Outstanding work — BLUSE
 
-**Updated:** 2026-09-02, after closing P0-3. All P0 items are now closed.
+**Updated:** 2026-09-02, after closing P0-3 and re-checking everything
+against the repaired data delivery. All P0 items are closed.
 **Purpose:** enough context to resume any item without re-deriving it.
 
-State: on `main`, clean tree, 66 tests passing (62 + 4 skipped outside a
+**Data note (2026-09-02):** `lband_short.h5` and `uhf_long.h5` were re-delivered
+without the corrupt stamp regions. All feature parquets for those two files were
+re-extracted and `all_features.parquet` rebuilt. **No conclusion in P0-1, P0-2,
+P0-3 or P1-4 changed** — the clustering work is all on `sband_short`, whose
+feature parquet is byte-identical, and the P0-3 cross-file thresholds were
+re-calibrated and hold. The retired `lband_short_clean` subset was *biased*
+(26.75% zero-drift against the full file's 46.60%), so per-band results computed
+on it were re-derived.
+
+State: on `main`, clean tree, 68 tests passing (64 + 4 skipped outside a
 workspace). PR #1 merged the Cluster Bench measurement work — three new
 modules (`diagnostics`, `metrics`, `matching`), wiring into both entry points,
 and the repository's first test suite. P0-1 and P0-2 are since closed by
@@ -247,7 +257,11 @@ no improvement).
 - **Coherent/incoherent test applies an SNR relation to a power ratio.** An
   unverified substitution, flagged in the code and docs. Worth resolving with
   the BLUSE team.
-- **`uhf_long.h5` has ~6,000 corrupt rows** and no `_clean` replacement. Ask.
+- ~~**`uhf_long.h5` has ~6,000 corrupt rows**~~ — **RESOLVED 2026-09-02.** The
+  BLUSE team re-delivered `uhf_long.h5` and `lband_short.h5` repaired. Both
+  scan with zero bad blocks and extract at 100% usable rows. Survey-wide usable
+  rows 1,605,678 → **2,014,055 (+25.4%)**, now exactly matching the team's
+  `filtered_hits.csv`. See `aug_2026_workshop/README.md` and AGENTS.md gotcha 7.
 - **Per-antenna voltages** would enable imaging follow-up. Ask.
 - Three unresolved Track A judgement calls: ITU masks, the DTV comb,
   `--tol-steps`. Do not change as a side effect of anything else.

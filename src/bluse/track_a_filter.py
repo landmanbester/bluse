@@ -152,7 +152,7 @@ def cut_max_drift(df, coeff):
     targets, i.e. our situation rather than K2-18's -- deliberately search
     +/-50 Hz/s "as many of our targets are toward unknown planetary systems".
     Ours are too. And the limit bites inside the range seticore actually
-    searched: on lband_short_clean it lands at 0.358-0.402 Hz/s against an
+    searched: on lband_short it lands at 0.358-0.402 Hz/s against an
     observed maximum of 0.4203, with 4,257 hits sitting at the extreme
     driftSteps -- exactly where a genuinely fast-drifting signal would be. In a
     blind survey a false negative costs more than a human looking at one more

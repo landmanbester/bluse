@@ -116,11 +116,29 @@ The golden tests were updated to assert this, including renaming
 `test_x03_is_over_weighted_on_sband_short`, whose name encoded the claim the
 measurement refutes.
 
-## 4. Caveats worth carrying
+## 4. Re-checked against the repaired data (2026-09-02)
+
+The BLUSE team re-delivered `lband_short.h5` and `uhf_long.h5` with the corrupt
+regions repaired, adding 408,377 usable rows across the survey (+25.4%). The
+cross-file calibration was re-run on the new tables. **Every threshold holds:**
+
+| rule | on the old tables | on the repaired tables |
+|---|---:|---:|
+| `share_knn` >2× / <½× | 5.0 flags/file | 5.4 |
+| `share_global` >2× / <½× | 7.4 | 7.4 |
+| `share-disagree` ≥2.0× | 5.0, 11 columns | 5.4, 12 (still too loose) |
+| **`share-disagree` ≥2.5×** | **2.1, 6 columns** | **2.6, 6 columns** |
+| `share-disagree` ≥3.0× | 1.9, 5 columns | 2.1, 5 columns |
+
+`share_knn` remains the more selective statistic and 2.5× remains the right
+disagreement bound. `sband_short`'s feature parquet is byte-identical before
+and after, so the per-column table in section 3 is unchanged.
+
+## 5. Caveats worth carrying
 
 - **A column's local share is a property of the file, not of the feature.**
-  `f10_timeseries_std` runs 2.96% on lband_short_clean and 12.29% on uhf_long;
-  `f02_abs_drift` runs 0.31% to 6.31%. A flag describes this run, not the
+  `f10_timeseries_std` runs 3.18% on mk_sample_hits and 12.20% on uhf_long;
+  `f02_abs_drift` runs 0.29% to 5.07%. A flag describes this run, not the
   feature in general.
 - **The two share flags remain ONE observation.** Shares sum to 1, so a column
   at 24% mechanically depresses every other toward the lower bound.
