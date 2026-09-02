@@ -26,6 +26,7 @@ import sys
 
 import h5py
 import numpy as np
+import pandas as pd
 
 import matplotlib
 matplotlib.use("Agg")
@@ -222,7 +223,33 @@ def cmd_stamps(args):
         dr = h["driftRate"][:]
         n = len(snr)
 
-        if args.sort == "snr":
+        if getattr(args, "rows", None):
+            # Explicit row selection, so a family or the candidate residue can
+            # be inspected directly: the taxonomy writes `file` and `row`, and
+            # this reads them straight back.
+            sel = pd.read_csv(args.rows)
+            if "row" not in sel.columns:
+                sys.exit(f"{args.rows} has no `row` column; expected the "
+                         f"output of bluse-cluster --match")
+            if "file" in sel.columns:
+                same = sel["file"].astype(str) == name
+                if not same.any():
+                    sys.exit(f"{args.rows} has no rows from {name} "
+                             f"(files present: "
+                             f"{', '.join(sorted(set(sel['file'].astype(str))))})")
+                sel = sel[same]
+            if "family" in sel.columns and args.family is not None:
+                sel = sel[sel["family"] == args.family]
+                if not len(sel):
+                    sys.exit(f"no rows for family {args.family} in {args.rows}")
+            order = sel["row"].to_numpy()[:n_show].astype(int)
+            bad = order[(order < 0) | (order >= n)]
+            if len(bad):
+                sys.exit(f"row index {bad[0]} is outside {name} (0-{n - 1})")
+            label = os.path.basename(args.rows)
+            if args.family is not None:
+                label += f", family {args.family}"
+        elif args.sort == "snr":
             order = np.argsort(snr)[::-1][:n_show]
             label = "highest SNR"
         elif args.sort == "drift":
@@ -275,7 +302,16 @@ def cmd_stamps(args):
         ax.set_xticks([]); ax.set_yticks([])
 
     fig.tight_layout()
-    savefig(fig, f"{name}_stamps_{args.sort}.png")
+    # Name the file after the SELECTION, not after --sort, which is ignored
+    # when rows are given explicitly -- otherwise every family lands on
+    # <name>_stamps_random.png and silently overwrites the last one.
+    if getattr(args, "rows", None):
+        tag = os.path.splitext(os.path.basename(args.rows))[0]
+        if args.family is not None:
+            tag += f"_fam{args.family}"
+    else:
+        tag = args.sort
+    savefig(fig, f"{name}_stamps_{tag}.png")
 
     print("\n  first few shown:")
     for k in range(min(6, len(order))):
@@ -525,6 +561,15 @@ def main():
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--sort", default="random",
                    choices=["random", "snr", "drift", "nonzero-drift"])
+    s.add_argument("--rows", default=None,
+                   help="CSV with a `row` column -- plot exactly those stamps "
+                        "instead of sorting. Takes the candidates or "
+                        "interesting file written by bluse-cluster --match, so "
+                        "the residue that matches no documented RFI band can "
+                        "be eyeballed. Filtered to this .h5 by the `file` "
+                        "column when present")
+    s.add_argument("--family", type=int, default=None,
+                   help="with --rows, restrict to one family id")
     s.set_defaults(func=cmd_stamps)
 
     s = sub.add_parser("obs", help="beam vs frequency for one observation")

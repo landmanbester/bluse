@@ -94,6 +94,7 @@ import matplotlib.pyplot as plt
 from . import features as F
 from . import diagnostics
 from . import matching
+from . import taxonomy
 from . import metrics
 from . import paths
 
@@ -525,6 +526,29 @@ def main():
         print(f"  matched {minfo['n_clusters']:,} clusters -> "
               f"{minfo['n_families']:,} families at cut {minfo['cut']:.3f} "
               f"({minfo['cut_source']})")
+        # Name the families against the documented allocations, and isolate
+        # what matches nothing -- that residue is the point of the exercise.
+        fam_table = taxonomy.name_families(df, fam)
+        if len(fam_table):
+            print()
+            for line in taxonomy.summarise(fam_table):
+                print(line)
+            fp = os.path.join(args.outdir, f"{tag}_families.csv")
+            fam_table.to_csv(fp, index=False)
+            print(f"\n  wrote {fp}")
+            cand = taxonomy.candidate_hits(df, fam, fam_table)
+            if len(cand):
+                ccols = [c for c in ["file", "row", "family", "obsid",
+                                     "sourceName", "frequency", "driftRate",
+                                     "snr", "n_beams"] if c in cand.columns]
+                cp = os.path.join(args.outdir, f"{tag}_candidates.csv")
+                cand.sort_values("snr", ascending=False)[ccols].to_csv(
+                    cp, index=False)
+                print(f"  wrote {cp}  ({len(cand):,} hits in "
+                      f"{cand.family.nunique()} unexplained families)")
+                print(f"  inspect them:  bluse-explore stamps "
+                      f"data/{tag}.h5 --rows {cp}")
+
         # Keep the family count and how it was chosen in the machine-readable
         # record, not only on stdout. The count is a CHOICE -- no cut rule can
         # derive it, since every cut of the Ward tree is determined by the
