@@ -24,11 +24,19 @@ downlink is a 35 MHz allocation, and a family with a 6 MHz IQR inside it is
 "the GSM downlink population" rather than "transmitter #4". Do not read a
 family as one emitter.
 
-Families FRAGMENT. Five separate families sit at 950.42-950.46 MHz differing
-only in drift rate (0.09 to 0.26 Hz/s). Either those are genuinely distinct
-populations or the matching cut is failing to merge them, and no metric can
-tell you which -- that is what the stamp grids are for. See
-`bluse-explore stamps --rows`.
+Families FRAGMENT, and the stamps prove it. Five families sit at
+950.42-950.46 MHz differing only in drift rate (0.09 to 0.26 Hz/s), and the
+same happens in the residue: ALL FIVE unexplained lband_short families contain
+one bright emitter at 874.9955 MHz, which alone accounts for 20.4% of the
+residue (7,423 of 36,338 hits). Families 18 and 19 are nearly pure (98.8% and
+84.8% of their members within 10 kHz of it) while 13, 14 and 16 are broad
+mixtures that happen to include it -- family 13's median reads 924.99 MHz, yet
+its twelve brightest members are all at 874.99.
+
+So a family count is an upper bound on the number of populations, not an
+estimate of it, and a family's median frequency is not a reliable description
+of it when the IQR runs to tens of MHz. No metric surfaced this; plotting the
+stamps did, in one command. See `bluse-explore stamps --rows ... --each-family`.
 
 Both spreads are reported. Full span is max-minus-min, an extreme-value
 statistic that a single outlier member dominates: on lband_short the median
