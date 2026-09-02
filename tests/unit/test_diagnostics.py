@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from bluse import diagnostics as D
 from tests.unit import fixtures
@@ -135,3 +136,131 @@ def test_knn_sample_default_is_large_enough_to_stop_flag_flicker():
     from bluse import diagnostics as D
 
     assert inspect.signature(D.audit).parameters["knn_sample"].default == 20_000
+
+
+# --- P1-5: contribution-equalising weights ---------------------------------
+
+def test_closed_form_equalises_the_global_share():
+    """w ∝ 1/sigma is the exact solution: share_global_j ∝ w_j^2 var_j."""
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    Z = rng.normal(size=(4000, 4)) * np.array([1.0, 5.0, 0.2, 2.0])
+    w, info = D.equalising_weights(Z, strategy="closed")
+    s = D._shares(Z * w, np.random.default_rng(0))
+    assert np.abs(s / 0.25 - 1).max() < 0.15
+    assert info["strategy"] == "closed"
+
+
+def test_boolean_and_flag_columns_keep_weight_one():
+    """
+    Spec section 2.2. A low-variance indicator draws a huge equalising weight --
+    a zero-drift boolean measured 0.33% k-NN share, which would have drawn
+    10.256, twice the constant measured to destroy eom.
+    """
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    Z = np.column_stack([rng.normal(0, 3, 3000), rng.normal(0, 1, 3000),
+                         (rng.random(3000) < 0.27).astype(float)])
+    cols = ["a", "b", "is_x"]
+    w, info = D.equalising_weights(Z, columns=cols, kinds={"is_x": "boolean"})
+    assert w[2] == 1.0
+    assert info["skipped"] == ["is_x"]
+
+
+def test_flag_columns_are_frozen_too():
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    Z = np.column_stack([rng.normal(0, 3, 2000), rng.normal(0, 0.2, 2000)])
+    w, info = D.equalising_weights(Z, columns=["a", "b_saturated"],
+                                   kinds={"b_saturated": "flag"})
+    assert w[1] == 1.0
+    assert info["skipped"] == ["b_saturated"]
+
+
+def test_weights_are_deterministic():
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    Z = rng.normal(size=(3000, 5)) * np.array([1.0, 4.0, 0.3, 2.0, 1.0])
+    a, _ = D.equalising_weights(Z, strategy="closed")
+    b, _ = D.equalising_weights(Z, strategy="closed")
+    assert np.array_equal(a, b)
+
+
+def test_iterative_strategy_respects_its_cap():
+    """
+    The undamped k-NN fixed point does NOT converge -- the k-NN graph is itself
+    a function of w, so the map is not a contraction. Measured: weights run
+    from 0.500-3.047 after one iteration to 0.044-10.347 after eight while the
+    share is still 0.33 off equal. The cap is what makes it usable at all.
+    """
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    Z = rng.normal(size=(3000, 5)) * np.array([1.0, 8.0, 0.2, 3.0, 1.0])
+    w, info = D.equalising_weights(Z, strategy="knn", iters=4, cap=2.0)
+    assert w.max() <= 2.0 + 1e-9
+    assert w.min() >= 1 / 2.0 - 1e-9
+    assert len(info["dev_trace"]) == 4
+
+
+def test_iterative_strategy_records_its_trajectory():
+    """
+    Spec/plan Task 2 step 2b: the endpoint alone cannot separate "slow" from
+    "the target is unattainable". A multiplicative update toward an unreachable
+    target diverges monotonically; only the trajectory tells them apart.
+    """
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    Z = rng.normal(size=(2000, 4)) * np.array([1.0, 6.0, 0.3, 2.0])
+    _, info = D.equalising_weights(Z, strategy="knn", iters=3, knn_sample=1500)
+    assert len(info["dev_trace"]) == 3
+    assert all(np.isfinite(info["dev_trace"]))
+
+
+def test_extreme_weight_spread_is_flagged():
+    """
+    The sd > 1e-12 floor only catches exactly-constant columns. A column with
+    sigma = 0.001 draws a huge weight and passes silently, and the failure then
+    presents as "clustering got worse after I added a feature", which is close
+    to undiagnosable. 2.0 is the measured scale to reason from: it is where eom
+    breaks.
+    """
+    from bluse import diagnostics as D
+
+    rng = np.random.default_rng(0)
+    Z = rng.normal(size=(2000, 8))
+    Z[:, 7] *= 0.001
+    w, info = D.equalising_weights(Z, strategy="closed")
+    assert info["spread_warning"]
+    assert w.max() <= D.EQUALISE_MAX_WEIGHT + 1e-9
+
+
+def test_degenerate_columns_do_not_produce_infinite_weights():
+    from bluse import diagnostics as D
+
+    Z = np.random.default_rng(0).normal(size=(500, 3))
+    Z[:, 1] = 4.0                                    # zero variance
+    w, _ = D.equalising_weights(Z, strategy="closed")
+    assert np.isfinite(w).all()
+    assert w[1] == 1.0
+
+
+def test_with_info_false_skips_the_expensive_diagnostic():
+    """
+    _shares_knn costs 1,311 ms on sband_short at knn_sample=20,000 against
+    1.7 ms for the weights. scale() is called per run, per rail render and once
+    per stability seed, so the info block must be opt-in.
+    """
+    from bluse import diagnostics as D
+
+    Z = np.random.default_rng(0).normal(size=(3000, 4)) * [1, 5, 0.3, 2]
+    w, info = D.equalising_weights(Z, strategy="closed", with_info=False)
+    assert "max_dev_knn" not in info
+    assert info["weight_max"] == pytest.approx(w.max())
+    full = D.equalising_weights(Z, strategy="closed", with_info=True)[1]
+    assert "max_dev_knn" in full and "max_dev_global" in full

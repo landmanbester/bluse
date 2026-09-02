@@ -39,6 +39,17 @@ SHARE_HIGH = 2.0
 SHARE_LOW = 0.5
 SHARE_DISAGREE = 2.5
 
+# Backstop on any single equalising weight, applied even when `cap` is None.
+# Mean-normalisation already bounds the maximum by roughly the column count, so
+# on real data this never binds -- the measured closed-form weights on
+# sband_short span 0.430 to 1.594. It exists because the sd > 1e-12 floor only
+# catches exactly-constant columns: a column with sigma = 0.001 among fifteen
+# would otherwise draw a weight near 8 unnoticed, and the failure presents as
+# "clustering got worse after I added a feature".
+EQUALISE_MAX_WEIGHT = 5.0
+# Ratio of largest to smallest weight above which info["spread_warning"] fires.
+EQUALISE_SPREAD_WARN = 10.0
+
 
 def robust_stats(X):
     """Median and IQR per column, for fitting a robust scaler on one row set."""
@@ -125,6 +136,138 @@ def _shares_knn(Z, k, rng, sample=5000):
     per = ((Z[a] - Z[b]) ** 2).mean(axis=0)
     tot = per.sum()
     return per / tot if tot > 0 else np.full(len(per), np.nan)
+
+
+def _normalise_weights(w, frozen, cap):
+    """
+    Mean-1 over the free columns, capped, with the frozen ones pinned at 1.0.
+
+    NOTE the cap is applied AFTER mean-normalisation and the result is not
+    re-normalised, so a capped weight vector has mean != 1. That is harmless
+    for the percentile matching cut, which is scale-invariant, but
+    derive_cut_quantile and any explicit `cut=` are absolute distances and
+    would shift. Re-normalising would push weights back over the cap, so this
+    is a deliberate choice rather than an oversight.
+    """
+    w = np.where(np.isfinite(w) & (w > 0), w, 1.0)
+    w = np.asarray(w, dtype=np.float64).copy()
+    w[frozen] = 1.0
+    free = ~frozen
+    if free.any() and w[free].mean() > 0:
+        w[free] = w[free] / w[free].mean()
+    # The backstop is ONE-SIDED, and deliberately. The documented hazard is a
+    # low-variance column drawing a LARGE weight -- the zero-drift indicator
+    # that would have drawn 10.256. A small weight merely suppresses a column,
+    # which is benign, and flooring it would block legitimate equalisation: a
+    # column with 5x the spread of its neighbours needs a weight near 1/5.
+    # An explicit `cap` stays two-sided, because that is what the P0-2
+    # weight-cap experiment measured.
+    hi = EQUALISE_MAX_WEIGHT
+    if cap:
+        w[free] = np.clip(w[free], 1.0 / cap, cap)
+        hi = min(hi, cap)
+    w[free] = np.minimum(w[free], hi)
+    return w
+
+
+def equalising_weights(Z, *, kinds=None, columns=None, strategy="closed",
+                       iters=0, damping=0.5, cap=None, min_samples=8,
+                       knn_sample=20_000, seed=0, with_info=True):
+    """
+    Per-column weights that equalise each column's contribution to the distance.
+
+    Robust scaling equalises the INTERQUARTILE RANGE, but HDBSCAN responds to
+    VARIANCE, and the ratio between them depends on distribution shape -- so
+    contributions run 1.7% to 24.3% globally against an equal share of 6.7%.
+    This targets the contribution itself.
+
+      strategy="closed"  w proportional to 1/sigma. This is the EXACT solution
+                         for the GLOBAL share, since share_global_j is
+                         proportional to w_j^2 var_j. One pass, no seed, 1.7 ms
+                         on sband_short.
+
+                         Read it for what it is: robust-scale, clip, then
+                         divide by sigma is "winsorise at +/-5 IQR units, then
+                         z-score". Dividing by the IQR and then by the standard
+                         deviation of the result is dividing by the standard
+                         deviation of the original, so the robust step
+                         contributes nothing except WHERE THE CLIP LANDS.
+
+      strategy="knn"     damped fixed point on the k-NN share, which is the
+                         statistic HDBSCAN actually responds to (P0-3) but
+                         which does NOT converge: the neighbour graph is itself
+                         a function of w, so the map is not a contraction.
+                         Measured undamped, the worst column is still 0.33 off
+                         an equal share after eight iterations while the
+                         weights diverge from 0.500-3.047 to 0.044-10.347.
+                         Usable only with `iters` and `cap` fixed by
+                         measurement; check info["dev_trace"] before trusting
+                         it.
+
+      strategy="hybrid"  closed form, then `iters` damped k-NN steps.
+
+    boolean and flag columns keep weight exactly 1.0. Their low variance draws
+    a huge weight -- a zero-drift indicator measured 0.33% k-NN share and would
+    have drawn 10.256, twice the constant measured to destroy eom.
+
+    `with_info=False` skips the achieved-deviation diagnostic, which calls
+    _shares_knn and costs 1,311 ms on sband_short at knn_sample=20,000 against
+    1.7 ms for the weights. scale() uses it: that call happens once per
+    clustering run, once per Bench rail render and once per stability seed.
+
+    Returns (weights, info). See
+    docs/superpowers/specs/2026-09-02-equalising-scaling-design.md.
+    """
+    Z = np.asarray(Z, dtype=np.float64)
+    n_cols = Z.shape[1]
+    kinds = kinds or {}
+    cols = list(columns) if columns is not None else [None] * n_cols
+    declared = np.array([kinds.get(c) in ("boolean", "flag") for c in cols])
+    # A column with no spread contributes nothing to any distance, so its
+    # weight is undefined rather than large. Freeze it at 1.0 alongside the
+    # declared booleans instead of letting mean-normalisation drift it.
+    degenerate = Z.std(axis=0) <= 1e-12
+    frozen = declared | degenerate
+
+    def _knn_dev(w):
+        s = _shares_knn(Z * w, min_samples, np.random.default_rng(seed),
+                        knn_sample)
+        s = np.where(np.isfinite(s) & (s > 1e-9), s, 1.0 / n_cols)
+        return s
+
+    w = np.ones(n_cols)
+    trace = []
+    if strategy in ("closed", "hybrid"):
+        sd = (Z * w).std(axis=0)
+        w = w / np.where(sd > 1e-12, sd, 1.0)
+        w = _normalise_weights(w, frozen, cap)
+    if strategy in ("knn", "hybrid"):
+        for _ in range(int(iters)):
+            s = _knn_dev(w)
+            trace.append(float(np.abs(s * n_cols - 1).max()))
+            w = w * ((1.0 / n_cols) / s) ** damping
+            w = _normalise_weights(w, frozen, cap)
+    w = _normalise_weights(w, frozen, cap)
+
+    lo = float(w.min())
+    info = {
+        "strategy": strategy,
+        "iters": int(iters),
+        "skipped": [c for c, f in zip(cols, declared) if f and c is not None],
+        "degenerate": [i for i, f in enumerate(degenerate) if f],
+        "dev_trace": trace,
+        "weight_min": lo,
+        "weight_max": float(w.max()),
+        "spread_warning": bool(lo > 0
+                               and w.max() / lo > EQUALISE_SPREAD_WARN),
+    }
+    if with_info:
+        rng = np.random.default_rng(seed)
+        sg = _shares(Z * w, rng)
+        sk = _shares_knn(Z * w, min_samples, rng, knn_sample)
+        info["max_dev_global"] = float(np.abs(sg * n_cols - 1).max())
+        info["max_dev_knn"] = float(np.abs(sk * n_cols - 1).max())
+    return w, info
 
 
 def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
