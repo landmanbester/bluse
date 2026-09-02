@@ -287,6 +287,9 @@ on `id`; anything else that pools files must do the same.
 
 ## Cluster Bench — interactive hyperparameter explorer
 
+> Vocabulary — *cluster*, *family*, *residue*, *candidate* — is defined in
+> [`../NOMENCLATURE.md`](../NOMENCLATURE.md).
+
 ```bash
 bluse-bench                       # then open http://127.0.0.1:8000
 bluse-bench --port 8080 --host 0.0.0.0   # share on the LAN
