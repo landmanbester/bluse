@@ -340,19 +340,36 @@ no improvement).
      injection harness would give a real objective function and settle whether
      the monotonicity is physics or an SNR gradient. This was already P2 §6;
      it is now the highest-value item in the repository.
-  2. **The `contrarian` set** — 1,515 hits in ≥32 beams that score clean.
+  2. **Did seed-averaging remove noise, or remove marginal detections?** The
+     `contrarian` set halved, 3,303 → 1,515, when the score went to a
+     three-seed mean. I wrote that up as removing churn. It is consistent with
+     the measurements and **it is not established** — a hit scoring 0.05 under
+     one seed and 0.3 under another is either churn or a genuinely marginal
+     case that averaging smoothed away, and nothing in this data separates
+     them. The 1,788 dropped hits are *unexamined*, not disproved.
+     `bluse-score --seeds 1` reproduces the larger set for comparison.
+     Resolving it needs the injections in item 1. **Decision taken 2026-09-03:
+     ship the three-seed mean anyway**, because reproducible counts matter more
+     for a number that goes in front of people than an unquantified tail does —
+     but do not quote the halving as a cleanup until this is answered.
+  3. **The `contrarian` set** — 1,515 hits in ≥32 beams that score clean.
      Instrumental, or the model's blind spot? Nobody has looked. (It was 3,303
      before seed-averaging; roughly half of it was churn — see
      [`track-e-2026-09.md`](track-e-2026-09.md) §9.)
-  3. **The shortlist's two artefact populations** — `lband_short` ~867.8 MHz
+  4. **The shortlist's two artefact populations** — `lband_short` ~867.8 MHz
      (bright first/last time rows) and `uhf_long` 599–678 MHz (blocky,
      intermittent). Both are new; neither is in any RFI table we hold.
-  4. **`f04`/`f06` are individually near-sufficient** (0.9667 / 0.9590 alone)
+  5. **`f04`/`f06` are individually near-sufficient** (0.9667 / 0.9590 alone)
      but add ~0.014 each given the rest, while `x01` is *weaker* alone (0.9380)
      and by far the largest marginal contributor. That is the P2 redundancy panel's
      acceptance case arriving from a second direction.
-  5. **Feed the score into Track A as a cut?** Needs an operating point, which
+  6. **Feed the score into Track A as a cut?** Needs an operating point, which
      needs item 1.
+  7. **The 12-feature default now rests on one argument.** Non-circularity with
+     Track A's frequency mask is all that survives — the AUC cost went
+     0.0004 → 0.0012 and cross-band transfer now favours all-16 on two bands of
+     three. Confirmed as the default 2026-09-03; revisit if that one argument
+     ever stops mattering.
 - **Myburgh filter 6** — continuity along the predicted drift trajectory. Not
   implemented.
 - **Coherent/incoherent test applies an SNR relation to a power ratio.** An
