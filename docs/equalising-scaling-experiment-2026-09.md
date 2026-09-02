@@ -69,8 +69,17 @@ That is a stronger and more durable statement than "candidate B lost".
 | **closed form** | **10.77** of 15 | 0.430–1.594 |
 | k-NN i=12 | **2.22** of 15 | 0.065–5.000 |
 
-(Participation ratio of the squared weights.) The top three columns hold 96% of
-the squared weight at i=12. A mode named *contribution-equalising* that
+(Participation ratio of the squared weights, on this one real matrix, where
+the spread of per-column sigma is modest — 0.44 to 1.63.) The top three columns
+hold 96% of the squared weight at i=12.
+
+*Read that statistic only as a comparison between rows of this table.* A low
+participation ratio of the weights is not by itself a defect: equalising
+columns whose spreads differ 25x requires weights that differ 25x. The property
+that actually distinguishes the two strategies is where the **contributions**
+end up, and that is what `test_the_shipped_strategy_actually_equalises`
+asserts — on the shares, not the weights. The first version of that test got
+this wrong and failed, correctly. A mode named *contribution-equalising* that
 concentrates 96% of the contribution into three of fifteen columns is not
 equalising anything — it is doing the opposite, and shipping it under that name
 would be false labelling.

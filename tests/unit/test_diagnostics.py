@@ -288,10 +288,16 @@ def test_equalising_default_is_the_measured_winner():
 
 def test_the_shipped_strategy_actually_equalises():
     """
-    The property the k-NN strategy failed. A mode named contribution-equalising
-    must not concentrate the contribution: measured on sband_short the closed
-    form keeps 10.77 of 15 effective dimensions where the k-NN fit collapsed to
-    2.22.
+    The property the k-NN strategy failed: the CONTRIBUTIONS must end up
+    spread across the columns, not concentrated.
+
+    Measure it on the shares, not on the weights. The first version of this
+    test used the participation ratio of w**2 and failed, correctly: to
+    equalise columns whose spreads differ 25x you NEED weights that differ 25x,
+    so a low participation ratio of the weights is the right behaviour, not a
+    defect. The n_eff figures quoted in the write-up (10.77 for the closed
+    form, 2.22 for the k-NN fit) are comparable to each other only because they
+    are computed on the same real matrix, where the spread of sigma is modest.
     """
     from bluse import diagnostics as D
 
@@ -300,5 +306,6 @@ def test_the_shipped_strategy_actually_equalises():
     w, _ = D.equalising_weights(Z, strategy=D.EQUALISE_STRATEGY,
                                 iters=D.EQUALISE_ITERS, cap=D.EQUALISE_CAP,
                                 with_info=False)
-    p = w ** 2 / np.sum(w ** 2)
-    assert 1 / np.sum(p ** 2) > 0.7 * len(w)
+    share = D._shares(Z * w, np.random.default_rng(0))
+    n_eff = 1 / np.sum((share / share.sum()) ** 2)
+    assert n_eff > 0.9 * len(w), n_eff
