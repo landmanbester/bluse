@@ -358,6 +358,27 @@ def _json_safe(obj):
     return obj
 
 
+def warn_if_eom_equalised(scaling, method):
+    """
+    Equalising scaling with eom is measured to collapse family reproducibility.
+
+    Warn, do not refuse. Refusing would block reproducing the measurement --
+    the repo keeps its rejected rules runnable for exactly that reason -- while
+    running silently would let someone quote a broken number.
+    """
+    if scaling != "robust-equalised" or method != "eom":
+        return
+    print("\n  WARNING equalising scaling with eom is measured to collapse "
+          "family reproducibility\n"
+          "  (family ARI 0.519 -> 0.044). Equalisation amplifies whichever "
+          "column is locally\n"
+          "  weakest, and eom's single root-level stability comparison is "
+          "fragile to that;\n"
+          "  no f02 treatment rescues it and weight caps do not either. Use "
+          "leaf, or\n"
+          "  --scaling robust. Proceeding because you asked.\n")
+
+
 def main():
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -385,7 +406,8 @@ def main():
                         "That made identical 3000-point draws return either "
                         "k=2 holding 99.7%% of points or ~200 microclusters "
                         "with 40%% noise. 8 collapses that to k in [2,12].")
-    p.add_argument("--scaling", choices=["robust", "quantile", "none"],
+    p.add_argument("--scaling",
+                   choices=["robust", "robust-equalised", "quantile", "none"],
                    default="robust",
                    help="how to equalise feature contribution before the "
                         "Euclidean distance. 'none' is GLOBULAR's literal spec "
@@ -462,12 +484,15 @@ def main():
         eq = 100.0 / max(len(columns), 1)
         print(f"\n  {int(good.sum()):,} rows, {len(columns)} features, "
               f"scaling={args.scaling}, equal share {eq:.1f}%\n")
+        eq = args.scaling == "robust-equalised"
+        wcol = f"{'weight':>7s}" if eq else ""
         print(f"  {'column':30s} {'vals':>7s} {'tie':>6s} {'clip':>6s} "
-              f"{'IQR':>9s} {'share':>7s} {'knn':>7s}  flags")
+              f"{'IQR':>9s}{wcol} {'share':>7s} {'knn':>7s}  flags")
         for r in rows:
+            wv = f"{r['weight']:7.3f}" if eq else ""
             print(f"  {r['label']:30s} {r['n_distinct']:7d} "
                   f"{r['max_tie_fraction']:6.3f} {r['clip_frac']:6.3f} "
-                  f"{r['iqr_raw']:9.3f} {100*r['share_global']:6.1f}% "
+                  f"{r['iqr_raw']:9.3f}{wv} {100*r['share_global']:6.1f}% "
                   f"{100*r['share_knn']:6.1f}%  {','.join(r['flags'])}")
         print(f"\n  knn carries the flag threshold "
               f"(share-high >{diagnostics.SHARE_HIGH:g}x equal, share-low "
@@ -477,6 +502,8 @@ def main():
               f"there the global number misleads.\n  The two share flags are "
               f"ONE observation -- shares sum to 1.\n")
         return
+
+    warn_if_eom_equalised(args.scaling, args.cluster_selection_method)
 
     if args.mode == "epochs":
         labels, cols, _, trace = cluster_epochs(df, args)
@@ -508,6 +535,21 @@ def main():
     summarise(df, labels, args.outdir, tag)
     q = metrics.quality(labels, df)
     q["epochs"] = metrics.epoch_trace(trace, len(labels))
+    # The scaling is part of the model, and under robust-equalised the weights
+    # ARE the model -- a family result is not interpretable without them.
+    q["scaling"] = args.scaling
+    if args.scaling == "robust-equalised":
+        Xw, wcols, _ = feature_matrix(df, columns=cols, scaling="robust")
+        # Same finite filter the clustering path applies. Without it the
+        # non-finite rows reach NearestNeighbors, which rejects NaN -- the run
+        # clustered fine and then died writing its own record.
+        Xw = Xw[np.isfinite(Xw).all(axis=1)]
+        wt, winfo = diagnostics.equalising_weights(
+            Xw, columns=wcols,
+            kinds={c + "_n": k for c, k in F.column_kinds().items()},
+            strategy=diagnostics.EQUALISE_STRATEGY,
+            iters=diagnostics.EQUALISE_ITERS, cap=diagnostics.EQUALISE_CAP)
+        q["equalising"] = {"weights": dict(zip(wcols, wt.tolist())), **winfo}
     if match_info is not None:
         q["matching"] = match_info
     if args.seeds and args.seeds > 1:

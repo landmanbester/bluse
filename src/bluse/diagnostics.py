@@ -331,16 +331,18 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
     # reads 0.000 for a mode that clips 5% of the column. Building the base
     # here also avoids scaling twice.
     base = None
+    weights = np.ones(raw.shape[1])
     if scaling in ("robust", "robust-equalised"):
         base = scale(raw, "robust")
         if scaling == "robust":
             Z = base
         else:
-            w, _ = equalising_weights(base, kinds=kinds, columns=columns,
-                                      strategy=EQUALISE_STRATEGY,
-                                      iters=EQUALISE_ITERS, cap=EQUALISE_CAP,
-                                      with_info=False)
-            Z = base * w
+            weights, _ = equalising_weights(base, kinds=kinds,
+                                            columns=columns,
+                                            strategy=EQUALISE_STRATEGY,
+                                            iters=EQUALISE_ITERS,
+                                            cap=EQUALISE_CAP, with_info=False)
+            Z = base * weights
     else:
         Z = scale(raw, scaling)
     q75r, q25r = np.percentile(raw, [75, 25], axis=0)
@@ -409,6 +411,7 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
             "iqr_raw": float(iqr_raw[i]),
             "iqr_scaled": float(iqr_scaled[i]),
             "clip_frac": clip_frac,
+            "weight": float(weights[i]),
             "share_global": float(sg[i]),
             "share_knn": float(sk[i]),
             "equal_share": float(equal),

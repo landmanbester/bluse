@@ -51,3 +51,20 @@ def test_metrics_json_records_how_the_family_count_was_chosen():
     round_tripped = json.loads(json.dumps(_json_safe(q), allow_nan=False))
     assert round_tripped["matching"]["n_families"] == 3
     assert round_tripped["matching"]["cut_source"] == "n_families=3"
+
+
+def test_equalised_with_eom_warns(capsys):
+    """
+    Spec section 2.1: warn loudly, still run. Refusing would block reproducing
+    the measurement; running silently would let someone quote a broken number.
+    """
+    from bluse.track_b_cluster import warn_if_eom_equalised
+
+    warn_if_eom_equalised("robust-equalised", "eom")
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "0.519" in out and "leaf" in out
+
+    warn_if_eom_equalised("robust-equalised", "leaf")
+    assert capsys.readouterr().out == ""
+    warn_if_eom_equalised("robust", "eom")
+    assert capsys.readouterr().out == ""
