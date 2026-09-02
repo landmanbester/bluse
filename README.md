@@ -541,6 +541,14 @@ Still open, in rough priority order:
 *(Track E landed 2026-09-03 — see below. `uhf_long.h5` and `lband_short.h5`
 were re-delivered repaired on 2026-09-02, so the "clean file" item is closed.)*
 
+## The journey
+
+Three days, 78 commits, and a much longer list of things that turned out not to
+be true. [`docs/journey/`](docs/journey/) is the narrative record — what
+happened in order, the seventeen wrong turns, and the working method that came
+out of them. Of four planned improvements, three were rejected by measuring
+them; the one unambiguous win sat in the backlog for the whole three days.
+
 ## Track E — the RFI score
 
 ```bash

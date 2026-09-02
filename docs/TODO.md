@@ -24,6 +24,10 @@ and the repository's first test suite. P0-1 and P0-2 are since closed by
 measurement, as are P1-4 and P0-3. **Every P0 item is closed.** The next
 item is P1-5, which is unblocked and ready to spec.
 
+**The narrative record** — how this got here, including everything that did
+not work — is in [`journey/`](journey/). Read it before proposing something
+that was already measured and rejected.
+
 ---
 
 ## Reference numbers you will otherwise re-derive
