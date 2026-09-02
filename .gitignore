@@ -16,6 +16,16 @@ __pycache__/
 # results and total ~1 MB.
 aug_2026_workshop/catalogues/*.parquet
 
+# Per-hit clustering outputs. The tracked record in clusters/ is deliberately
+# SMALL -- the largest CSV in it is 178 KB -- because it is a record of results,
+# not a data store. A full-file run writes far more than that: lband_short's
+# interesting.csv alone is 17.6 MB, 100x the largest tracked CSV, and adding it
+# would have nearly doubled a 31 MB repository with per-hit sky coordinates.
+# Commit the small aggregates (<name>_families.csv, <name>_summary.csv from a
+# sampled run) and regenerate the rest.
+aug_2026_workshop/clusters/*_candidates.csv
+aug_2026_workshop/clusters/*_metrics.json
+
 # Plots are regenerated on demand by bluse-explore.
 aug_2026_workshop/plots/
 

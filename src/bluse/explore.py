@@ -26,6 +26,7 @@ import sys
 
 import h5py
 import numpy as np
+import pandas as pd
 
 import matplotlib
 matplotlib.use("Agg")
@@ -212,7 +213,45 @@ def cmd_meta(args):
 # cmd: stamps
 # ----------------------------------------------------------------------------
 
+def stamp_tag(name, args):
+    """
+    Filename tag for a stamp grid, named after the SELECTION.
+
+    --sort is ignored when rows are given explicitly, so keying the filename on
+    it put every family on <name>_stamps_random.png, each silently overwriting
+    the last. The dataset name is stripped from the CSV stem too, since it is
+    already the filename prefix -- otherwise the L-band candidates come out as
+    lband_short_stamps_lband_short_candidates_fam19.png.
+    """
+    if not getattr(args, "rows", None):
+        return args.sort
+    tag = os.path.splitext(os.path.basename(args.rows))[0]
+    if tag.startswith(name + "_"):
+        tag = tag[len(name) + 1:]
+    if getattr(args, "family", None) is not None:
+        tag += f"_fam{args.family}"
+    return tag
+
+
 def cmd_stamps(args):
+    if getattr(args, "each_family", False):
+        if not args.rows:
+            sys.exit("--each-family needs --rows")
+        fams = pd.read_csv(args.rows)
+        name = os.path.basename(resolve_files([args.file])[0]).replace(".h5", "")
+        if "file" in fams.columns:
+            fams = fams[fams["file"].astype(str) == name]
+        if "family" not in fams.columns or not len(fams):
+            sys.exit(f"no family column or no rows for {name} in {args.rows}")
+        ids = sorted(fams["family"].unique())
+        print(f"  {len(ids)} families in {os.path.basename(args.rows)}: "
+              f"{', '.join(str(i) for i in ids)}")
+        for fid in ids:
+            one = argparse.Namespace(**vars(args))
+            one.each_family, one.family = False, int(fid)
+            cmd_stamps(one)
+        return
+
     f = resolve_files([args.file])[0]
     name = os.path.basename(f).replace(".h5", "")
     n_show = args.n
@@ -222,7 +261,33 @@ def cmd_stamps(args):
         dr = h["driftRate"][:]
         n = len(snr)
 
-        if args.sort == "snr":
+        if getattr(args, "rows", None):
+            # Explicit row selection, so a family or the candidate residue can
+            # be inspected directly: the taxonomy writes `file` and `row`, and
+            # this reads them straight back.
+            sel = pd.read_csv(args.rows)
+            if "row" not in sel.columns:
+                sys.exit(f"{args.rows} has no `row` column; expected the "
+                         f"output of bluse-cluster --match")
+            if "file" in sel.columns:
+                same = sel["file"].astype(str) == name
+                if not same.any():
+                    sys.exit(f"{args.rows} has no rows from {name} "
+                             f"(files present: "
+                             f"{', '.join(sorted(set(sel['file'].astype(str))))})")
+                sel = sel[same]
+            if "family" in sel.columns and args.family is not None:
+                sel = sel[sel["family"] == args.family]
+                if not len(sel):
+                    sys.exit(f"no rows for family {args.family} in {args.rows}")
+            order = sel["row"].to_numpy()[:n_show].astype(int)
+            bad = order[(order < 0) | (order >= n)]
+            if len(bad):
+                sys.exit(f"row index {bad[0]} is outside {name} (0-{n - 1})")
+            label = os.path.basename(args.rows)
+            if args.family is not None:
+                label += f", family {args.family}"
+        elif args.sort == "snr":
             order = np.argsort(snr)[::-1][:n_show]
             label = "highest SNR"
         elif args.sort == "drift":
@@ -275,7 +340,7 @@ def cmd_stamps(args):
         ax.set_xticks([]); ax.set_yticks([])
 
     fig.tight_layout()
-    savefig(fig, f"{name}_stamps_{args.sort}.png")
+    savefig(fig, f"{name}_stamps_{stamp_tag(name, args)}.png")
 
     print("\n  first few shown:")
     for k in range(min(6, len(order))):
@@ -518,13 +583,51 @@ def main():
     s.add_argument("file")
     s.set_defaults(func=cmd_meta)
 
-    s = sub.add_parser("stamps", help="grid of stamp waterfalls")
-    s.add_argument("file")
-    s.add_argument("--n", type=int, default=24)
-    s.add_argument("--ncol", type=int, default=6)
-    s.add_argument("--seed", type=int, default=0)
+    s = sub.add_parser(
+        "stamps",
+        help="grid of stamp waterfalls (the time-frequency cutout per hit)",
+        description="Plot a grid of stamp waterfalls. Each panel is one hit: "
+                    "frequency across, time downward, so a drifting carrier "
+                    "is a slanted line. Writes a PNG into plots/ and prints "
+                    "the path.\n\n"
+                    "To eyeball the RFI families that match no documented "
+                    "band -- the output of `bluse-cluster --match` -- use "
+                    "--rows with the candidates CSV.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    s.add_argument("file", help="the HDF5 file. A bare NAME.h5 resolves "
+                                "against the workspace data/ directory, so "
+                                "'lband_short.h5' and 'data/lband_short.h5' "
+                                "are equivalent from anywhere. The .h5 "
+                                "extension is required")
+    s.add_argument("--n", type=int, default=24,
+                   help="how many stamps to plot (default 24). With --rows, "
+                        "the first N rows of the CSV, which is sorted by SNR "
+                        "descending, so you get the brightest members")
+    s.add_argument("--ncol", type=int, default=6,
+                   help="panels per row in the grid (default 6)")
+    s.add_argument("--seed", type=int, default=0,
+                   help="RNG seed for --sort random (default 0). Ignored with "
+                        "--rows, which selects explicitly")
     s.add_argument("--sort", default="random",
-                   choices=["random", "snr", "drift", "nonzero-drift"])
+                   choices=["random", "snr", "drift", "nonzero-drift"],
+                   help="which hits to show when --rows is not given: "
+                        "random sample, highest SNR, largest |drift rate|, or "
+                        "highest SNR among non-zero-drift hits (default "
+                        "random). Ignored with --rows")
+    s.add_argument("--rows", default=None,
+                   help="CSV with a `row` column -- plot exactly those stamps "
+                        "instead of sorting. Takes the candidates or "
+                        "interesting file written by bluse-cluster --match, so "
+                        "the residue that matches no documented RFI band can "
+                        "be eyeballed. Filtered to this .h5 by the `file` "
+                        "column when present")
+    s.add_argument("--family", type=int, default=None,
+                   help="with --rows, plot only this family id (the `family` "
+                        "column of the candidates CSV)")
+    s.add_argument("--each-family", action="store_true",
+                   help="with --rows, write ONE grid per family instead of "
+                        "one grid overall -- the usual way to look at a whole "
+                        "residue in a single command")
     s.set_defaults(func=cmd_stamps)
 
     s = sub.add_parser("obs", help="beam vs frequency for one observation")

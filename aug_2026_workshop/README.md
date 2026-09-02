@@ -287,6 +287,9 @@ on `id`; anything else that pools files must do the same.
 
 ## Cluster Bench — interactive hyperparameter explorer
 
+> Vocabulary — *cluster*, *family*, *residue*, *candidate* — is defined in
+> [`../NOMENCLATURE.md`](../NOMENCLATURE.md).
+
 ```bash
 bluse-bench                       # then open http://127.0.0.1:8000
 bluse-bench --port 8080 --host 0.0.0.0   # share on the LAN
@@ -492,6 +495,37 @@ way, i.e. one where the global number misleads. On sband_short that is `x03`
 (24.3% global, 5.9% local — so it is *not* flagged over-weighted any more) and
 `f02` (9.8× on uhf_short). See
 [`../docs/share-knn-threshold-2026-09.md`](../docs/share-knn-threshold-2026-09.md).
+
+### `robust-equalised`: what it does and does not do
+
+`--scaling robust-equalised`, or the Bench's *robust + equalised* option,
+divides each column by its post-clip standard deviation. That is **winsorised
+standardisation** — winsorise at ±5 IQR units, then z-score — and it equalises
+each column's share of the *global* distance exactly.
+
+It does **not** equalise the k-NN share, which P0-3 established is the
+statistic HDBSCAN actually responds to. The strategy that targets that one was
+measured and rejected: its target is unattainable for a tied column, so it
+drives `f02` to the weight ceiling forever, and it collapses the metric to ~2
+effective dimensions. See
+[`../docs/equalising-scaling-experiment-2026-09.md`](../docs/equalising-scaling-experiment-2026-09.md).
+
+**Use it with `leaf` only.** Under `eom` equalisation collapses family
+reproducibility (family ARI 0.519 → 0.044); both entry points warn and still
+run, so the measurement stays reproducible.
+
+Measured on sband_short at 36 families, averaged over three independent seed
+triples:
+
+| | family ARI | median family span |
+|---|---:|---:|
+| `robust` | 0.479 | 265.5 MHz |
+| `robust-equalised` | **0.513** | **183.4 MHz** |
+
+A real but modest gain — +0.034 reproducibility and 31% tighter families,
+consistent in sign on all three seed triples. It does **not** reach the ≥0.60 /
+≤120 MHz bar the spec set, because that bar was derived from a measurement now
+understood to be an artefact.
 
 ### Reproducibility is three numbers, never one
 

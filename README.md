@@ -17,6 +17,12 @@ Two complementary approaches, both installed by this package:
 Plus **Cluster Bench**, a browser tool for trying clustering strategies
 interactively instead of waiting on batch runs.
 
+> **New here?** [`NOMENCLATURE.md`](NOMENCLATURE.md) defines the vocabulary —
+> hit, stamp, beam, cluster, **family**, residue, candidate — and says what each
+> one is *not*. Worth five minutes before reading any results: a "family" is a
+> band of spectrum with characteristic behaviour, not a transmitter, and the
+> number of families is a choice rather than a discovery.
+
 > **Data note.** The code and documentation here are MIT-licensed. The BLUSE
 > observational data and everything derived from it are **not** — they belong to
 > SARAO / Breakthrough Listen and are destined for forthcoming publications. Do

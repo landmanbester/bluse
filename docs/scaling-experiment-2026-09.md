@@ -12,6 +12,14 @@
 > `eom` collapse, not its cause: `eom`'s single root-level stability
 > comparison is fragile to reweighting in general. See
 > [`f02-rework-experiment-2026-09.md`](f02-rework-experiment-2026-09.md).
+>
+> **SUPERSEDED FURTHER, 2026-09-02 (P1-5).** The equalising procedure measured
+> on this page — an iterative fixed point on the k-NN share — is now known to
+> be **ill-posed**: its target is unattainable for a column with a large tie
+> fraction, so it drives `f02` to the weight ceiling indefinitely and collapses
+> the metric to ~2 effective dimensions. The 0.6659 headline here is therefore
+> not a result a well-posed method can reproduce. See
+> [`equalising-scaling-experiment-2026-09.md`](equalising-scaling-experiment-2026-09.md).
 
 Reproduce: `/tmp/.../p0_2.py` (throwaway); method and numbers below.
 

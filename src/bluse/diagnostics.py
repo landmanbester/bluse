@@ -39,6 +39,29 @@ SHARE_HIGH = 2.0
 SHARE_LOW = 0.5
 SHARE_DISAGREE = 2.5
 
+# Backstop on any single equalising weight, applied even when `cap` is None.
+# Mean-normalisation already bounds the maximum by roughly the column count, so
+# on real data this never binds -- the measured closed-form weights on
+# sband_short span 0.430 to 1.594. It exists because the sd > 1e-12 floor only
+# catches exactly-constant columns: a column with sigma = 0.001 among fifteen
+# would otherwise draw a weight near 8 unnoticed, and the failure presents as
+# "clustering got worse after I added a feature".
+EQUALISE_MAX_WEIGHT = 5.0
+# The shipped strategy, chosen by measurement in
+# docs/equalising-scaling-experiment-2026-09.md. "closed" is w ∝ 1/sigma --
+# winsorised standardisation. The k-NN strategy scored far higher and was
+# REJECTED: its target is unattainable for any column with a large tie
+# fraction (tied pairs contribute zero to that coordinate and are
+# disproportionately near neighbours), so it drives f02's weight to the
+# ceiling forever, collapses the metric from 15 effective dimensions to 2.2,
+# and is beaten by a hand-built two-column weighting. See that write-up before
+# changing these.
+EQUALISE_STRATEGY = "closed"
+EQUALISE_ITERS = 0
+EQUALISE_CAP = None
+# Ratio of largest to smallest weight above which info["spread_warning"] fires.
+EQUALISE_SPREAD_WARN = 10.0
+
 
 def robust_stats(X):
     """Median and IQR per column, for fitting a robust scaler on one row set."""
@@ -46,7 +69,7 @@ def robust_stats(X):
     return {"median": np.median(X, axis=0), "iqr": q75 - q25}
 
 
-def scale(X, how, stats=None):
+def scale(X, how, stats=None, *, kinds=None, columns=None):
     """
     Equalise how much each feature contributes to the Euclidean distance.
 
@@ -55,9 +78,22 @@ def scale(X, how, stats=None):
 
       "robust"    centre on the median, divide by the IQR, clip to +/-CLIP.
       "quantile"  rank-transform every feature to a uniform distribution.
+      "robust-equalised"
+                  robust, then per-column weights that equalise each column's
+                  contribution to the distance. Robust equalises the IQR, but
+                  HDBSCAN responds to VARIANCE and the ratio between them
+                  depends on distribution shape, so contributions run 1.7% to
+                  24.3% globally against an equal share of 6.7%. See
+                  equalising_weights, and
+                  docs/equalising-scaling-experiment-2026-09.md for why the
+                  shipped strategy is the closed form rather than the k-NN one
+                  that scored higher.
       "none"      GLOBULAR's literal spec -- their transforms are applied
                   upstream in features.normalise(), so "none" means "the
                   paper's preprocessing and nothing further".
+
+    `kinds`/`columns` are used only by "robust-equalised", to keep boolean and
+    flag columns at weight exactly 1.0.
 
     `stats` is an optional {"median", "iqr"} from robust_stats(), so the fit
     can come from a different row set than the transform. The Bench uses it to
@@ -65,20 +101,37 @@ def scale(X, how, stats=None):
     the fit is on whatever is passed, which is what the CLI wants.
     """
     X = np.array(X, copy=True)
-    if how == "robust":
+    if how in ("robust", "robust-equalised"):
         if stats is None:
             stats = robust_stats(X)
         med = np.asarray(stats["median"])
         iqr = np.asarray(stats["iqr"])
         iqr = np.where(iqr > 1e-12, iqr, 1.0)
-        return np.clip((X - med) / iqr, -CLIP, CLIP)
+        base = np.clip((X - med) / iqr, -CLIP, CLIP)
+        if how == "robust":
+            return base
+        # with_info=False deliberately: the achieved-deviation diagnostic calls
+        # _shares_knn, which costs 1,311 ms on sband_short against 1.7 ms for
+        # the weights, and scale() runs once per clustering run, once per Bench
+        # rail render and once per stability seed.
+        w, _ = equalising_weights(base, kinds=kinds, columns=columns,
+                                  strategy=EQUALISE_STRATEGY,
+                                  iters=EQUALISE_ITERS, cap=EQUALISE_CAP,
+                                  with_info=False)
+        return base * w
     if how == "quantile":
         from sklearn.preprocessing import QuantileTransformer
         qt = QuantileTransformer(output_distribution="uniform",
                                  n_quantiles=min(1000, len(X)),
                                  subsample=200_000, random_state=0)
         return qt.fit_transform(X)
-    return X
+    if how == "none":
+        return X
+    # Previously any unrecognised value fell through to `return X`, so a typo'd
+    # mode silently meant "none" -- the quietest possible way to run the wrong
+    # experiment.
+    raise ValueError(f"unknown scaling {how!r}; expected one of "
+                     f"robust, robust-equalised, quantile, none")
 
 
 def _shares(Z, rng, n_pairs=4000):
@@ -127,6 +180,138 @@ def _shares_knn(Z, k, rng, sample=5000):
     return per / tot if tot > 0 else np.full(len(per), np.nan)
 
 
+def _normalise_weights(w, frozen, cap):
+    """
+    Mean-1 over the free columns, capped, with the frozen ones pinned at 1.0.
+
+    NOTE the cap is applied AFTER mean-normalisation and the result is not
+    re-normalised, so a capped weight vector has mean != 1. That is harmless
+    for the percentile matching cut, which is scale-invariant, but
+    derive_cut_quantile and any explicit `cut=` are absolute distances and
+    would shift. Re-normalising would push weights back over the cap, so this
+    is a deliberate choice rather than an oversight.
+    """
+    w = np.where(np.isfinite(w) & (w > 0), w, 1.0)
+    w = np.asarray(w, dtype=np.float64).copy()
+    w[frozen] = 1.0
+    free = ~frozen
+    if free.any() and w[free].mean() > 0:
+        w[free] = w[free] / w[free].mean()
+    # The backstop is ONE-SIDED, and deliberately. The documented hazard is a
+    # low-variance column drawing a LARGE weight -- the zero-drift indicator
+    # that would have drawn 10.256. A small weight merely suppresses a column,
+    # which is benign, and flooring it would block legitimate equalisation: a
+    # column with 5x the spread of its neighbours needs a weight near 1/5.
+    # An explicit `cap` stays two-sided, because that is what the P0-2
+    # weight-cap experiment measured.
+    hi = EQUALISE_MAX_WEIGHT
+    if cap:
+        w[free] = np.clip(w[free], 1.0 / cap, cap)
+        hi = min(hi, cap)
+    w[free] = np.minimum(w[free], hi)
+    return w
+
+
+def equalising_weights(Z, *, kinds=None, columns=None, strategy="closed",
+                       iters=0, damping=0.5, cap=None, min_samples=8,
+                       knn_sample=20_000, seed=0, with_info=True):
+    """
+    Per-column weights that equalise each column's contribution to the distance.
+
+    Robust scaling equalises the INTERQUARTILE RANGE, but HDBSCAN responds to
+    VARIANCE, and the ratio between them depends on distribution shape -- so
+    contributions run 1.7% to 24.3% globally against an equal share of 6.7%.
+    This targets the contribution itself.
+
+      strategy="closed"  w proportional to 1/sigma. This is the EXACT solution
+                         for the GLOBAL share, since share_global_j is
+                         proportional to w_j^2 var_j. One pass, no seed, 1.7 ms
+                         on sband_short.
+
+                         Read it for what it is: robust-scale, clip, then
+                         divide by sigma is "winsorise at +/-5 IQR units, then
+                         z-score". Dividing by the IQR and then by the standard
+                         deviation of the result is dividing by the standard
+                         deviation of the original, so the robust step
+                         contributes nothing except WHERE THE CLIP LANDS.
+
+      strategy="knn"     damped fixed point on the k-NN share, which is the
+                         statistic HDBSCAN actually responds to (P0-3) but
+                         which does NOT converge: the neighbour graph is itself
+                         a function of w, so the map is not a contraction.
+                         Measured undamped, the worst column is still 0.33 off
+                         an equal share after eight iterations while the
+                         weights diverge from 0.500-3.047 to 0.044-10.347.
+                         Usable only with `iters` and `cap` fixed by
+                         measurement; check info["dev_trace"] before trusting
+                         it.
+
+      strategy="hybrid"  closed form, then `iters` damped k-NN steps.
+
+    boolean and flag columns keep weight exactly 1.0. Their low variance draws
+    a huge weight -- a zero-drift indicator measured 0.33% k-NN share and would
+    have drawn 10.256, twice the constant measured to destroy eom.
+
+    `with_info=False` skips the achieved-deviation diagnostic, which calls
+    _shares_knn and costs 1,311 ms on sband_short at knn_sample=20,000 against
+    1.7 ms for the weights. scale() uses it: that call happens once per
+    clustering run, once per Bench rail render and once per stability seed.
+
+    Returns (weights, info). See
+    docs/superpowers/specs/2026-09-02-equalising-scaling-design.md.
+    """
+    Z = np.asarray(Z, dtype=np.float64)
+    n_cols = Z.shape[1]
+    kinds = kinds or {}
+    cols = list(columns) if columns is not None else [None] * n_cols
+    declared = np.array([kinds.get(c) in ("boolean", "flag") for c in cols])
+    # A column with no spread contributes nothing to any distance, so its
+    # weight is undefined rather than large. Freeze it at 1.0 alongside the
+    # declared booleans instead of letting mean-normalisation drift it.
+    degenerate = Z.std(axis=0) <= 1e-12
+    frozen = declared | degenerate
+
+    def _knn_dev(w):
+        s = _shares_knn(Z * w, min_samples, np.random.default_rng(seed),
+                        knn_sample)
+        s = np.where(np.isfinite(s) & (s > 1e-9), s, 1.0 / n_cols)
+        return s
+
+    w = np.ones(n_cols)
+    trace = []
+    if strategy in ("closed", "hybrid"):
+        sd = (Z * w).std(axis=0)
+        w = w / np.where(sd > 1e-12, sd, 1.0)
+        w = _normalise_weights(w, frozen, cap)
+    if strategy in ("knn", "hybrid"):
+        for _ in range(int(iters)):
+            s = _knn_dev(w)
+            trace.append(float(np.abs(s * n_cols - 1).max()))
+            w = w * ((1.0 / n_cols) / s) ** damping
+            w = _normalise_weights(w, frozen, cap)
+    w = _normalise_weights(w, frozen, cap)
+
+    lo = float(w.min())
+    info = {
+        "strategy": strategy,
+        "iters": int(iters),
+        "skipped": [c for c, f in zip(cols, declared) if f and c is not None],
+        "degenerate": [i for i, f in enumerate(degenerate) if f],
+        "dev_trace": trace,
+        "weight_min": lo,
+        "weight_max": float(w.max()),
+        "spread_warning": bool(lo > 0
+                               and w.max() / lo > EQUALISE_SPREAD_WARN),
+    }
+    if with_info:
+        rng = np.random.default_rng(seed)
+        sg = _shares(Z * w, rng)
+        sk = _shares_knn(Z * w, min_samples, rng, knn_sample)
+        info["max_dev_global"] = float(np.abs(sg * n_cols - 1).max())
+        info["max_dev_knn"] = float(np.abs(sk * n_cols - 1).max())
+    return w, info
+
+
 def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
           knn_sample=20_000, seed=0):
     """
@@ -139,7 +324,27 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
     kinds = kinds or {}
     rng = np.random.default_rng(seed)
 
-    Z = scale(raw, scaling)
+    # clip_frac must come from the ROBUST BASE. Under "robust-equalised" the
+    # returned matrix is base * w, so a value sitting exactly on the +/-5 clip
+    # is no longer there after weighting and the threshold test misses it --
+    # measured, a weight of 0.661 moves a clipped row to 3.31 and clip_frac
+    # reads 0.000 for a mode that clips 5% of the column. Building the base
+    # here also avoids scaling twice.
+    base = None
+    weights = np.ones(raw.shape[1])
+    if scaling in ("robust", "robust-equalised"):
+        base = scale(raw, "robust")
+        if scaling == "robust":
+            Z = base
+        else:
+            weights, _ = equalising_weights(base, kinds=kinds,
+                                            columns=columns,
+                                            strategy=EQUALISE_STRATEGY,
+                                            iters=EQUALISE_ITERS,
+                                            cap=EQUALISE_CAP, with_info=False)
+            Z = base * weights
+    else:
+        Z = scale(raw, scaling)
     q75r, q25r = np.percentile(raw, [75, 25], axis=0)
     iqr_raw = q75r - q25r
     q75s, q25s = np.percentile(Z, [75, 25], axis=0)
@@ -159,8 +364,8 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
         # Only "robust" clips. Under "none"/"quantile" this test would flag
         # any raw value with magnitude >= 5, which is not a clip at all --
         # `bluse-cluster --report --scaling none` reported false clips.
-        clip_frac = (float((np.abs(Z[:, i]) >= CLIP - 1e-12).mean())
-                     if scaling == "robust" else 0.0)
+        clip_frac = (float((np.abs(base[:, i]) >= CLIP - 1e-12).mean())
+                     if base is not None else 0.0)
 
         flags = []
         if kind in ("continuous", "ordinal") and tie > TIE_FLAG:
@@ -206,6 +411,7 @@ def audit(raw, columns, *, scaling="robust", kinds=None, min_samples=8,
             "iqr_raw": float(iqr_raw[i]),
             "iqr_scaled": float(iqr_scaled[i]),
             "clip_frac": clip_frac,
+            "weight": float(weights[i]),
             "share_global": float(sg[i]),
             "share_knn": float(sk[i]),
             "equal_share": float(equal),

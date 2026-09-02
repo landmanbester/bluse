@@ -161,6 +161,18 @@ tstart tstartts fileoffset telescopeId sourceName obsid filename data`
 across the whole delivery and stable between the HDF5 files and
 `filtered_hits.csv`. Prefer it to `(file, row)` for joins.
 
+## Nomenclature
+
+`hit`, `stamp`, `beam`, `cluster`, `family`, `residue`, `candidate` are defined
+once in [`NOMENCLATURE.md`](NOMENCLATURE.md), with what each is *not*. Do not
+restate those definitions here or anywhere else -- link to that file.
+
+The three that cause the most trouble: a **cluster** id is a batch artefact and
+means nothing on its own; a **family** is a band of spectrum, not a
+transmitter, and its count is a parameter rather than a measurement; and the
+**candidate** set is the residue that is ALSO beam-confined, not the residue
+itself.
+
 ## Gotchas — read before writing analysis code
 
 1. **Stamps are padded with `-1`.** Cutouts are right-aligned in a 120-channel

@@ -111,6 +111,11 @@ class Dataset:
     columns: list[str]
     embedding: dict = field(default_factory=dict)   # method -> (n,2) float32
     scaler_stats: dict = field(default_factory=dict)  # full-population med/IQR
+    # (scaling, tuple(columns)) -> equalising weights. The shipped closed-form
+    # strategy costs 1.7 ms so this is not needed for it; it is here because a
+    # k-NN strategy costs 9.3 s per iteration on the larger files, and four
+    # lines now removes a cliff if the strategy is ever revisited.
+    weights: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -193,6 +198,38 @@ def load_dataset(name, sample, seed):
     return ds
 
 
+def _weights_for(ds, use, scaling):
+    """
+    Equalising weights for this column subset, cached.
+
+    Weights depend on the SUBSET, not just the dataset: shares are relative and
+    sum to 1, so toggling a feature in the rail changes every other column's
+    weight. Hence the cache key includes the columns.
+    """
+    if scaling != "robust-equalised":
+        return None
+    cols = tuple(ds.columns[i] for i in use)
+    ck = (scaling, cols)
+    if ck not in ds.weights:
+        base = diagnostics.scale(ds.raw[:, use], "robust", _stats_for(ds, use))
+        kinds = {c + "_n": k for c, k in F.column_kinds().items()}
+        w, _ = diagnostics.equalising_weights(
+            base, columns=list(cols), kinds=kinds,
+            strategy=diagnostics.EQUALISE_STRATEGY,
+            iters=diagnostics.EQUALISE_ITERS, cap=diagnostics.EQUALISE_CAP,
+            with_info=False)
+        ds.weights[ck] = w
+    return ds.weights[ck]
+
+
+def _scaled(ds, use, scaling):
+    """The matrix HDBSCAN sees, with the D-4 fit and the equalising weights."""
+    Z = diagnostics.scale(ds.raw[:, use], "robust" if scaling ==
+                          "robust-equalised" else scaling, _stats_for(ds, use))
+    w = _weights_for(ds, use, scaling)
+    return Z if w is None else Z * w
+
+
 def _stats_for(ds, use):
     """
     Full-population robust scaling stats, restricted to the columns in use.
@@ -226,7 +263,7 @@ def embed(ds, method, cols=None, scaling="robust"):
     if ck in ds.embedding:
         return ds.embedding[ck]
     use = [ds.columns.index(c) for c in cols]
-    Z = scale(ds.raw[:, use], scaling, _stats_for(ds, use))
+    Z = _scaled(ds, use, scaling)
     if method == "umap":
         try:
             import umap
@@ -300,7 +337,7 @@ def run_hdbscan(X, mcs, ms, method="eom"):
 def cluster(ds, cols, scaling, mode, mcs, ms, epochs, batch, seed,
             method="eom"):
     use = [ds.columns.index(c) for c in cols]
-    X = scale(ds.raw[:, use], scaling, _stats_for(ds, use))
+    X = _scaled(ds, use, scaling)
     n = len(X)
     labels = np.full(n, -1, dtype=np.int32)
     trace = []
@@ -420,6 +457,18 @@ def pick_dataset(request: Request, file: str = Form(...),
     kinds = {c + "_n": k for c, k in F.column_kinds().items()}
     rows = diagnostics.audit(ds.raw, ds.columns, scaling="robust",
                              kinds=kinds, min_samples=8)
+    # The rail is built once, before a scaling is chosen, and its shares and
+    # flags are calibrated on robust -- so keep the audit on robust and attach
+    # the weights the equalised mode WOULD apply, over the full column set.
+    # Indicative rather than exact: weights depend on the selected subset,
+    # because shares are relative and sum to 1. Costs 1.7 ms.
+    eqw, _ = diagnostics.equalising_weights(
+        diagnostics.scale(ds.raw, "robust", ds.scaler_stats),
+        columns=list(ds.columns), kinds=kinds,
+        strategy=diagnostics.EQUALISE_STRATEGY,
+        iters=diagnostics.EQUALISE_ITERS, cap=diagnostics.EQUALISE_CAP,
+        with_info=False)
+    eqw = {c: float(v) for c, v in zip(ds.columns, eqw)}
 
     sat = {}
     if "f08_turning_bw_saturated" in ds.df.columns:
@@ -438,6 +487,7 @@ def pick_dataset(request: Request, file: str = Form(...),
             "equal_pct": 100.0 * r["equal_share"],
             "tie_pct": 100.0 * r["max_tie_fraction"],
             "clip_pct": 100.0 * r["clip_frac"],
+            "weight": eqw.get(r["col"], 1.0),
         })
     return templates.TemplateResponse(request, "_controls.html", {
         "ds": ds, "features": feats,
@@ -544,7 +594,7 @@ async def do_cluster(request: Request):
         families, match_info = None, {}
         if p["match"] == "on":
             _use = [ds.columns.index(c) for c in cols]
-            Xs = scale(ds.raw[:, _use], p["scaling"], _stats_for(ds, _use))
+            Xs = _scaled(ds, _use, p["scaling"])
             families, match_info = matching.match(labels, Xs,
                                                   pct=p["match_pct"])
             fq = metrics.quality(families, ds.df)

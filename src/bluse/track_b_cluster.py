@@ -94,6 +94,7 @@ import matplotlib.pyplot as plt
 from . import features as F
 from . import diagnostics
 from . import matching
+from . import taxonomy
 from . import metrics
 from . import paths
 
@@ -121,6 +122,10 @@ def feature_matrix(df, columns=None, drop_saturated=True, scaling="robust"):
                   SNR tail dominate.
       "quantile"  rank-transform every feature to a uniform distribution. The
                   most aggressive equaliser; discards magnitude entirely.
+      "robust-equalised"
+                  robust, then per-column weights that equalise each column's
+                  contribution to the distance -- winsorised standardisation.
+                  See diagnostics.equalising_weights.
       "none"      GLOBULAR's literal spec. Kept so the difference is
                   reproducible, not because it works well here.
     """
@@ -132,18 +137,27 @@ def feature_matrix(df, columns=None, drop_saturated=True, scaling="robust"):
     X = np.array(df[columns].to_numpy(dtype=np.float64), copy=True)
     good = np.isfinite(X).all(axis=1)
 
-    if scaling == "robust":
-        sub = X[good]
-        med = np.median(sub, axis=0)
-        q75, q25 = np.percentile(sub, [75, 25], axis=0)
-        iqr = np.where((q75 - q25) > 1e-12, q75 - q25, 1.0)
-        X = np.clip((X - med) / iqr, -5, 5)
-    elif scaling == "quantile":
-        from sklearn.preprocessing import QuantileTransformer
-        qt = QuantileTransformer(output_distribution="uniform",
-                                 n_quantiles=min(1000, int(good.sum())),
-                                 subsample=200_000, random_state=0)
-        X[good] = qt.fit_transform(X[good])
+    # DELEGATE. This function used to carry its own copy of the scaling logic,
+    # with branches for "robust" and "quantile" only, so any other mode fell
+    # through and returned X untouched -- `--scaling robust-equalised` silently
+    # clustered the RAW matrix while the metrics JSON, which computes weights
+    # separately, reported equalising weights. The record disagreed with the
+    # matrix actually clustered.
+    #
+    # The duplicate was the fault, not the missing branch. diagnostics.scale
+    # says it is "the single shared implementation ... so the two paths cannot
+    # drift", and that was false here. Delegating makes it true, so a mode
+    # added there cannot be missed here.
+    #
+    # Fit on the finite rows and transform only those: the non-finite rows are
+    # dropped by every caller via `good`, and passing them through a scaler is
+    # how NaN reached NearestNeighbors once already.
+    if scaling != "none":
+        stats = (diagnostics.robust_stats(X[good])
+                 if scaling.startswith("robust") else None)
+        kinds = {c + "_n": k for c, k in F.column_kinds().items()}
+        X[good] = diagnostics.scale(X[good], scaling, stats,
+                                    kinds=kinds, columns=columns)
     return X, columns, good
 
 
@@ -358,6 +372,27 @@ def _json_safe(obj):
     return obj
 
 
+def warn_if_eom_equalised(scaling, method):
+    """
+    Equalising scaling with eom is measured to collapse family reproducibility.
+
+    Warn, do not refuse. Refusing would block reproducing the measurement --
+    the repo keeps its rejected rules runnable for exactly that reason -- while
+    running silently would let someone quote a broken number.
+    """
+    if scaling != "robust-equalised" or method != "eom":
+        return
+    print("\n  WARNING equalising scaling with eom is measured to collapse "
+          "family reproducibility\n"
+          "  (family ARI 0.519 -> 0.044). Equalisation amplifies whichever "
+          "column is locally\n"
+          "  weakest, and eom's single root-level stability comparison is "
+          "fragile to that;\n"
+          "  no f02 treatment rescues it and weight caps do not either. Use "
+          "leaf, or\n"
+          "  --scaling robust. Proceeding because you asked.\n")
+
+
 def main():
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -385,7 +420,8 @@ def main():
                         "That made identical 3000-point draws return either "
                         "k=2 holding 99.7%% of points or ~200 microclusters "
                         "with 40%% noise. 8 collapses that to k in [2,12].")
-    p.add_argument("--scaling", choices=["robust", "quantile", "none"],
+    p.add_argument("--scaling",
+                   choices=["robust", "robust-equalised", "quantile", "none"],
                    default="robust",
                    help="how to equalise feature contribution before the "
                         "Euclidean distance. 'none' is GLOBULAR's literal spec "
@@ -462,12 +498,15 @@ def main():
         eq = 100.0 / max(len(columns), 1)
         print(f"\n  {int(good.sum()):,} rows, {len(columns)} features, "
               f"scaling={args.scaling}, equal share {eq:.1f}%\n")
+        eq = args.scaling == "robust-equalised"
+        wcol = f"{'weight':>7s}" if eq else ""
         print(f"  {'column':30s} {'vals':>7s} {'tie':>6s} {'clip':>6s} "
-              f"{'IQR':>9s} {'share':>7s} {'knn':>7s}  flags")
+              f"{'IQR':>9s}{wcol} {'share':>7s} {'knn':>7s}  flags")
         for r in rows:
+            wv = f"{r['weight']:7.3f}" if eq else ""
             print(f"  {r['label']:30s} {r['n_distinct']:7d} "
                   f"{r['max_tie_fraction']:6.3f} {r['clip_frac']:6.3f} "
-                  f"{r['iqr_raw']:9.3f} {100*r['share_global']:6.1f}% "
+                  f"{r['iqr_raw']:9.3f}{wv} {100*r['share_global']:6.1f}% "
                   f"{100*r['share_knn']:6.1f}%  {','.join(r['flags'])}")
         print(f"\n  knn carries the flag threshold "
               f"(share-high >{diagnostics.SHARE_HIGH:g}x equal, share-low "
@@ -477,6 +516,8 @@ def main():
               f"there the global number misleads.\n  The two share flags are "
               f"ONE observation -- shares sum to 1.\n")
         return
+
+    warn_if_eom_equalised(args.scaling, args.cluster_selection_method)
 
     if args.mode == "epochs":
         labels, cols, _, trace = cluster_epochs(df, args)
@@ -498,6 +539,29 @@ def main():
         print(f"  matched {minfo['n_clusters']:,} clusters -> "
               f"{minfo['n_families']:,} families at cut {minfo['cut']:.3f} "
               f"({minfo['cut_source']})")
+        # Name the families against the documented allocations, and isolate
+        # what matches nothing -- that residue is the point of the exercise.
+        fam_table = taxonomy.name_families(df, fam)
+        if len(fam_table):
+            print()
+            for line in taxonomy.summarise(fam_table):
+                print(line)
+            fp = os.path.join(args.outdir, f"{tag}_families.csv")
+            fam_table.to_csv(fp, index=False)
+            print(f"\n  wrote {fp}")
+            cand = taxonomy.candidate_hits(df, fam, fam_table)
+            if len(cand):
+                ccols = [c for c in ["file", "row", "family", "obsid",
+                                     "sourceName", "frequency", "driftRate",
+                                     "snr", "n_beams"] if c in cand.columns]
+                cp = os.path.join(args.outdir, f"{tag}_candidates.csv")
+                cand.sort_values("snr", ascending=False)[ccols].to_csv(
+                    cp, index=False)
+                print(f"  wrote {cp}  ({len(cand):,} hits in "
+                      f"{cand.family.nunique()} unexplained families)")
+                print(f"  inspect them:  bluse-explore stamps "
+                      f"data/{tag}.h5 --rows {cp}")
+
         # Keep the family count and how it was chosen in the machine-readable
         # record, not only on stdout. The count is a CHOICE -- no cut rule can
         # derive it, since every cut of the Ward tree is determined by the
@@ -508,6 +572,21 @@ def main():
     summarise(df, labels, args.outdir, tag)
     q = metrics.quality(labels, df)
     q["epochs"] = metrics.epoch_trace(trace, len(labels))
+    # The scaling is part of the model, and under robust-equalised the weights
+    # ARE the model -- a family result is not interpretable without them.
+    q["scaling"] = args.scaling
+    if args.scaling == "robust-equalised":
+        Xw, wcols, _ = feature_matrix(df, columns=cols, scaling="robust")
+        # Same finite filter the clustering path applies. Without it the
+        # non-finite rows reach NearestNeighbors, which rejects NaN -- the run
+        # clustered fine and then died writing its own record.
+        Xw = Xw[np.isfinite(Xw).all(axis=1)]
+        wt, winfo = diagnostics.equalising_weights(
+            Xw, columns=wcols,
+            kinds={c + "_n": k for c, k in F.column_kinds().items()},
+            strategy=diagnostics.EQUALISE_STRATEGY,
+            iters=diagnostics.EQUALISE_ITERS, cap=diagnostics.EQUALISE_CAP)
+        q["equalising"] = {"weights": dict(zip(wcols, wt.tolist())), **winfo}
     if match_info is not None:
         q["matching"] = match_info
     if args.seeds and args.seeds > 1:

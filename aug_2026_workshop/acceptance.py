@@ -85,6 +85,34 @@ def main():
                                "n_families": fq["n_clusters"]},
         }
 
+    # P1-5: the shipped equalising mode, reported at matched family count in
+    # the non-degenerate region. leaf only -- under eom equalisation collapses
+    # family reproducibility, measured.
+    Zeq = D.scale(ds.raw, "robust-equalised",
+                  kinds={c + "_n": k for c, k in F.column_kinds().items()},
+                  columns=list(ds.columns))
+    eq_ds = DS(Zeq, ds.columns, ds.df)
+    labels, X, _, _ = app.cluster(eq_ds, ds.columns, "none", "epochs",
+                                  4, 8, 8, 3000, 0, "leaf")
+
+    def run_fam_eq(seed):
+        lab, Xs, _, _ = app.cluster(eq_ds, ds.columns, "none", "epochs",
+                                    4, 8, 8, 3000, seed, "leaf")
+        return matching.match(lab, Xs, n_families=36)[0]
+
+    out["leaf_equalised"] = {
+        "n_clusters": int(len(np.unique(labels[labels >= 0]))),
+        "stability_families_at36": metrics.stability(run_fam_eq, seeds=SEEDS),
+        "at_families": {},
+    }
+    for n in (16, 24, 36, 44):
+        fam = matching.match(labels, X, n_families=n)[0]
+        q = metrics.quality(fam, ds.df)
+        out["leaf_equalised"]["at_families"][str(n)] = {
+            "narrow_frac": q["narrow_frac"],
+            "median_span_mhz": q["median_span_mhz"],
+        }
+
     # The provisional-taxonomy hedge: how much does the deferred scaling work
     # plausibly move the families? Drop the two columns that dominate the
     # global distance share and see what changes.

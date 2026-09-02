@@ -39,7 +39,10 @@ bench = [
 umap = ["umap-learn>=0.5.5"]
 # The test suite. tests/unit is synthetic and runs anywhere; tests/workspace
 # needs a features/ directory and is skipped without one.
-dev = ["pytest>=7.4"]
+dev = [
+    "pytest>=7.4",
+    "ipdb>=0.13.13",
+]
 all = ["bluse[bench,umap,dev]"]
 
 [project.scripts]
