@@ -340,27 +340,30 @@ no improvement).
 
   **New questions it raised, in priority order:**
   1. ~~**Synthetic injections are now the binding constraint.**~~ — **FIRST
-     RESULT 2026-09-03**, branch `feature/synthetic-injections`, written up in
-     [`injections-2026-09.md`](injections-2026-09.md). It answered both
-     falsification risks, and not in Track E's favour:
-     - a cut at the shipped `shortlist_below=0.1` keeps **at most 43%** of
-       injected real signals (control 11%), so 0.1 is not a defensible
-       operating point for anyone who cares about not discarding signals;
-     - retention **peaks near SNR 35 and collapses to 0.006** at SNR 100 with
-       no drift, where the paired shift turns *positive* — a bright carrier is
-       scored as more RFI-like than the noise it replaced. Not extrapolation:
-       no injected feature falls outside the trained range. The mechanism is
-       that a bright narrowband carrier converges on the file's typical
-       morphology, and the typical hit is RFI.
-     - **Pruning is unaffected**; the shortlist is weaker than it looked.
+     RESULT 2026-09-03**, PR #3, [`injections-2026-09.md`](injections-2026-09.md).
+     Re-run after review corrected two errors in the first version (a √2 error
+     in the SNR axis, found by Copilot; a substrate set that was 42% confirmed
+     multi-beam RFI, found by review). Stratified by beam class, on the
+     single-beam population the score is deployed on:
+     - injecting a real drifting signal lifts shortlist retention from **0.428
+       to at best 0.581** — a modest gain, not a transformation;
+     - the paired shift **reverses** above catalogue SNR ≈10 (zero drift) to
+       ≈30 (0.3 Hz/s): the injection makes the hit look *more* like RFI;
+     - **pruning is NOT unaffected**, contrary to the first write-up: at
+       catalogue SNR ≈51 with no drift, **91%** of injected real signals land
+       above the 0.9 pruning threshold against a 33% control. That claim is
+       withdrawn.
+     - injecting into confirmed multi-beam RFI clears it into the shortlist up
+       to **46%** of the time — a demonstrated false-negative pathway.
 
-     Still open on this: a **clean-substrate run**. Every injection here sits on
-     a real hit (controls score 0.82, so mostly RFI), which makes these numbers
-     a lower bound. Synthetic cubes with matched noise are the comparison, and
-     the difference between the two would measure how much the substrate
-     matters. Also open: a wider drift grid (the curve is still rising at
-     0.3 Hz/s) and injecting the same signal across a beam set, which would
-     test the filter and the score against each other directly.
+     Next, in value order: a **Gamma-fluctuating injection** (the current one is
+     a noiseless ridge whose temporal statistics no real detection has, and it
+     is ~10 lines); an **injected-vs-real discriminator** to bound the bright
+     arm's validity; **bandwidth in the grid**; a **drift-matched** column;
+     **real empty substrates** chosen on `x01_drift_residual` near its
+     pure-noise value rather than on catalogue SNR; and the **threshold sweep
+     with the cost axis**, which is the operating point this still has not
+     produced.
   2. **Did seed-averaging remove noise, or remove marginal detections?** The
      `contrarian` set halved, 3,303 → 1,515, when the score went to a
      three-seed mean. I wrote that up as removing churn. It is consistent with

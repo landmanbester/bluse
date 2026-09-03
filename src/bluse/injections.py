@@ -103,23 +103,52 @@ def amplitude_for_snr(profile, sigma, snr):
     """
     Amplitude giving a matched-filter SNR of `snr` against noise scale `sigma`.
 
-    A filter matched to the profile g sums signal as A*sum(g) and noise as
-    sigma*sqrt(sum(g^2)), so
+    A filter matched to the profile g weights the data BY g, so it sums signal
+    as A*sum(g^2) and noise as sigma*sqrt(sum(g^2)):
 
-        SNR = A * sum(g) / (sigma * sqrt(sum(g^2)))
+        SNR = A * sum(g^2) / (sigma * sqrt(sum(g^2)))
+            = A * sqrt(sum(g^2)) / sigma
 
-    which inverts to the expression below. Stating it this way -- rather than
-    "peak channel over noise" -- makes the number independent of how many
-    channels and time steps the signal happens to occupy, so an SNR 20
-    injection means the same thing in UHF (1.01 Hz channels, 36 steps) as in
-    S band (1.63 Hz, 24 steps). It is NOT guaranteed identical to seticore's
-    own definition; it is a stated, monotone, dimensionless strength, and the
-    calibration curve is reported against it rather than against a claim of
-    equivalence.
+    which inverts to the expression below.
+
+    THE FIRST VERSION OF THIS FUNCTION WAS WRONG and every number in the first
+    injection run carried the error. It used `A*sum(g)/(sigma*sqrt(sum(g^2)))`,
+    which takes its numerator from a UNIT-weight filter and its denominator from
+    a matched one -- not a consistent filter at all. Monte Carlo against the
+    real statistic: asking for 20 delivered 14.19, a factor of 1/sqrt(2).
+
+    For the Gaussian profile and the grid first shipped the error was a near
+    constant sqrt(2) rescale of the axis (1.4142 across S/L/UHF and drifts
+    0-0.3, worst deviation 0.4%), so no qualitative conclusion moved -- but it
+    is genuinely profile-dependent once bandwidth is swept: an unresolved
+    carrier at 0.8 Hz gives 1.678 at zero drift and 1.389 at 0.3 Hz/s. Found by
+    Copilot on PR #3.
+
+    Stating SNR this way makes it independent of how many channels and time
+    steps the signal occupies. It is NOT seticore's definition; the conversion
+    to a single-channel dedoppler statistic is recorded in
+    docs/injections-2026-09.md.
     """
     g = np.asarray(profile, dtype=np.float64)
-    s1, s2 = g.sum(), np.sqrt((g ** 2).sum())
-    return 0.0 if s1 <= 0 else float(snr) * float(sigma) * s2 / s1
+    s2 = np.sqrt((g ** 2).sum())
+    return 0.0 if s2 <= 0 else float(snr) * float(sigma) / s2
+
+
+def dedoppler_snr(profile, amplitude, sigma):
+    """
+    The single-channel dedoppler SNR the same injection would show -- the
+    seticore-style statistic, summing one channel per timestep along the track.
+
+    Reported alongside the matched-filter value because every operational
+    statement has to be expressible in units a user can measure on their own
+    data, and the catalogue's `snr` column is of this kind. The ratio between
+    the two is band-dependent, so quoting only the harness unit invites a reader
+    to compare it against `snr` and be wrong.
+    """
+    g = np.asarray(profile, dtype=np.float64)
+    T = g.shape[0]
+    peak = g[np.arange(T), np.argmax(g, axis=1)]
+    return float(amplitude) * float(peak.sum()) / (float(sigma) * np.sqrt(T))
 
 
 def inject(cube, meta, *, snr, drift_hz_s, bandwidth_hz=DEFAULT_BANDWIDTH_HZ,
@@ -178,41 +207,51 @@ def normalise_like(reference, new_raw, columns, suffix="_n", by="file"):
     Map new raw feature values onto the transform the pipeline ALREADY applied
     -- PER FILE, because that is how the pipeline applied it.
 
-    The GLOBULAR transforms are monotone rank maps, and `all_features.parquet`
-    stores both sides of each one. So the transform never needs refitting:
-    interpolating a new raw value onto the stored (raw, raw_n) curve reproduces
-    it exactly for any value inside the observed range.
+    `all_features.parquet` stores both sides of every transform: the raw column
+    and its `_n` partner. The transforms are monotone, so they never need
+    refitting -- interpolating a new raw value onto the stored (raw, raw_n)
+    curve reproduces the map exactly inside the observed range.
 
-    THE MAP IS PER FILE. `bluse-features` calls `normalise()` inside `extract()`,
-    once per file, and `summarise()` then concatenates the per-file frames
-    without re-normalising. So a `_n` value means "this hit's rank within its own
-    file", not within the survey, and the same raw value maps to different `_n`
-    in different files -- measured: x01_drift_residual = 0.2790005 is 0.1523 in
-    lband_long and 0.0253 in mk_sample_hits. Interpolating on the pooled table
-    silently mixes seven maps; interpolating on the substrate's own file is
-    exact.
+    THE MAP IS PER FILE. `bluse-features` calls `normalise()` inside
+    `extract()`, once per file, and `summarise()` then concatenates without
+    re-normalising. So a `_n` value is a rank within its OWN FILE, not within
+    the survey, and the same raw value maps to different `_n` in different
+    files -- measured: x01_drift_residual = 0.2790005 is 0.1523 in lband_long
+    and 0.0253 in mk_sample_hits.
 
-    Two alternatives were measured and rejected. Refitting
-    `features.normalise` on the union redraws QuantileTransformer's 200,000-row
-    subsample and shifts the map by **0.070 mean absolute score** on low-SNR
-    substrates -- four times the seed noise, enough to swamp the effect this
-    experiment measures. Interpolating on the pooled table leaves **0.127**
-    residual on x01 alone. Re-extraction itself is exact: all 12 raw columns
-    reproduce bit-identically against the stored table.
+    WHY REFITTING SHIFTS THE MAP. An earlier version of this docstring blamed
+    QuantileTransformer redrawing its 200,000-row subsample. That was wrong:
+    **none of the 12 stamp columns uses a quantile transform.** They are `unit`
+    (f04, f12), `log-unit` (f05, f08, f10, f11, f13, x01), `unit-max` (f09) and
+    `none` (f06, f07, x02); only f01 and f02 are quantile, and both are META
+    features that FEATURE_SETS["stamp"] does not contain. The real mechanism is
+    more mundane and more dangerous: `unit` and `log-unit` are per-file MIN-MAX,
+    so an injected value beyond a file's observed max moves `lo`/`hi` and
+    rescales EVERY row in that file. Caught by review on PR #3.
 
-    Values outside a file's observed range clip to its endpoints, which is what
-    the pipeline's own transform does with its tie mass.
+    Measured costs of the alternatives: refitting `features.normalise` on the
+    union moved scores by 0.070 mean absolute -- four times the seed noise;
+    interpolating on the POOLED table left 0.127 residual. Per-file
+    interpolation is exact (0.000e+00 across 3,000 rows, all 12 columns), and
+    re-extraction is exact independently (all 12 raw columns bit-identical).
+
+    Values outside a file's observed range clip to its endpoints. For the affine
+    transforms here the correct behaviour is linear EXTRAPOLATION, so the
+    returned diagnostic counts how many values fall outside -- see
+    `normalise_like`'s second return value.
     """
     import pandas as pd
 
     ref_files = set(reference[by].unique())
     out = pd.DataFrame(index=new_raw.index,
                        columns=[c + suffix for c in columns], dtype=np.float64)
+    oor = np.zeros(len(new_raw))
     for fname, part in new_raw.groupby(by, sort=False):
         ref = reference[reference[by] == fname]
         if ref.empty:
             raise ValueError(f"{fname!r} has no rows in the reference table; "
                              f"known files: {sorted(ref_files)}")
+        n_out = np.zeros(len(part))
         for c in columns:
             x = np.asarray(ref[c], dtype=np.float64)
             y = np.asarray(ref[c + suffix], dtype=np.float64)
@@ -225,48 +264,85 @@ def normalise_like(reference, new_raw, columns, suffix="_n", by="file"):
             f = np.isfinite(v)
             if len(ux):
                 r[f] = np.interp(v[f], ux, ys[first])
+                # np.interp CLAMPS outside the fitted range, so a value beyond
+                # a file's observed max is silently pinned to its endpoint --
+                # and the model's 256 bins make the endpoint and far beyond it
+                # indistinguishable. Count it rather than claim it cannot happen.
+                n_out += (v < ux[0]) | (v > ux[-1])
             out.loc[part.index, c + suffix] = r
-    return out.reset_index(drop=True)
+        oor[new_raw.index.get_indexer(part.index)] = n_out / max(len(columns), 1)
+    return out.reset_index(drop=True), oor
 
 
-def select_substrates(cat, n, *, max_snr=8.0, seed=0):
+SUBSTRATE_CLASSES = {"single": (1, 2), "mid": (3, 31), "multibeam": (32, 64)}
+
+
+def substrate_class(n_beams):
+    """The three populations, by the same cuts the weak labels use."""
+    nb = np.asarray(n_beams)
+    return np.where(nb >= 32, "multibeam", np.where(nb <= 2, "single", "mid"))
+
+
+def select_substrates(cat, n, *, max_snr=8.0, beams=None, seed=0):
     """
     Hits near the detection floor, to inject on top of.
 
-    Low SNR is the closest thing to an empty cube this archive has, and it is
-    NOT empty: at the floor the stamps still show visible drifting carriers.
-    That is why every measurement here is a control/injected pair -- see the
-    module docstring.
+    `beams` is an inclusive (lo, hi) bound on `n_beams`, and leaving it None was
+    a defect in the first version of this experiment. Low SNR does NOT imply few
+    beams: filtering on `snr <= 8` alone gave 42.4% multi-beam RFI, 44.4%
+    ambiguous and only 13.1% single-beam hits -- so the headline pooled a
+    population the score is deployed on with one it was trained to reject, and
+    the two behave in opposite directions (docs/injections-2026-09.md #3).
+
+    Sample each class separately and report it separately. Pooling is what
+    breaks.
     """
     pool = cat[cat["snr"] <= max_snr]
+    if beams is not None:
+        lo, hi = beams
+        pool = pool[(pool["n_beams"] >= lo) & (pool["n_beams"] <= hi)]
+    if pool.empty:
+        return pool
     if len(pool) < n:
-        pool = cat.nsmallest(max(n, 1), "snr")
-    return pool.sample(min(n, len(pool)), random_state=seed).sort_values("row")
+        n = len(pool)
+    return (pool.sample(n, random_state=seed)
+            .sort_values("row").reset_index(drop=True))
 
 
-# Reported per substrate, in this order, so the floor is always visible:
-#   stored    the score the shipped pipeline gives this hit
+# Reported per substrate, in this order:
+#   stored    the same hit's STORED _n columns, scored by the same fold ensemble
 #   control   re-extracted and re-normalised, NO injection
 #   injected  the same, with a synthetic carrier added
 #
-# `stored` vs `control` is the cost of re-extraction plus refitting the rank
-# transforms -- measured at mean 0.017 in absolute score, about 3x the
-# seed-to-seed noise. It is a floor on this experiment and it is reported, not
-# assumed away. `control` vs `injected` is the measurement, and it is clean:
-# both go through ONE normalise call, so they share a transform exactly.
+# `stored` vs `control` is a HARNESS SELF-CONSISTENCY CHECK, not a comparison
+# against the shipped column -- it uses one fold's ensemble, whereas fit_score
+# scores unlabelled rows with the mean of all five. It is exactly zero in the
+# committed run, which is real evidence that re-extraction plus normalise_like
+# reproduces the stored values. An earlier comment here claimed it measured a
+# 0.017 discrepancy against the shipped pipeline; both halves were wrong.
+#
+# `control` vs `injected` is the measurement. Both go through ONE normalise
+# call and both traverse inject(), so they share every code path except the
+# amplitude.
 
 
-def run(files, *, workspace_dirs, feature_table, n_substrate=200,
+def run(files, *, workspace_dirs, feature_table, n_per_class=150,
+        classes=("single", "mid", "multibeam"),
         snr_grid=(5, 8, 12, 20, 35, 60, 100), drift_grid=(0.0, 0.1, 0.3),
         max_snr=8.0, bandwidth_hz=DEFAULT_BANDWIDTH_HZ, crop=EXTRACTION_CROP,
         seed=0, n_splits=5, n_seeds=3, verbose=True):
     """
-    Inject, extract, score. Returns a tidy frame, one row per
-    (substrate, snr, drift), plus the controls at snr=0.
+    Inject, extract, score. One row per (substrate, snr, drift), controls
+    included at snr=0.
 
-    Everything goes through the real code path: `F.prepare_batch` and the
-    registered stamp features, not a reimplementation. A harness that computed
-    its own features would measure the harness.
+    Substrates are sampled PER BEAM CLASS and the class is recorded, because
+    pooling them was the defect that broke the first run: the score responds in
+    opposite directions on single-beam and multi-beam substrates, and a pooled
+    number is a composition effect (docs/injections-2026-09.md #3).
+
+    Everything goes through the real code path -- `F.prepare_batch` and the
+    registered stamp features. A harness that computed its own features would
+    measure the harness.
     """
     import os
 
@@ -287,7 +363,7 @@ def run(files, *, workspace_dirs, feature_table, n_substrate=200,
         feature_table, features="stamp", n_splits=n_splits, seed=seed,
         n_seeds=n_seeds)
 
-    rows, meta_rows = [], []
+    rows, meta_rows, n_unreadable = [], [], 0
     for name in files:
         cat_path = os.path.join(workspace_dirs["catalogues"],
                                 f"{name}_cat.parquet")
@@ -296,53 +372,106 @@ def run(files, *, workspace_dirs, feature_table, n_substrate=200,
             say(f"  {name}: missing catalogue or HDF5, skipped")
             continue
         cat = pd.read_parquet(cat_path)
-        sub = select_substrates(cat, n_substrate, max_snr=max_snr, seed=seed)
-        idx = sub["row"].to_numpy().astype(int)
-        with h5py.File(h5_path, "r") as h:
-            cube = np.stack([h["data"][int(r)] for r in idx])
-        say(f"  {name}: {len(sub)} substrates, "
-            f"SNR {sub.snr.min():.1f}-{sub.snr.max():.1f}")
 
-        variants = [(0.0, 0.0)] + [(s, d) for s in snr_grid for d in drift_grid]
-        for snr, drift in variants:
-            c = cube if snr == 0 else inject(
-                cube, sub, snr=snr, drift_hz_s=drift, bandwidth_hz=bandwidth_hz)
-            feats = stamp_features(c, sub, crop_channels=crop)
-            block = pd.DataFrame({k: np.asarray(v, dtype=np.float64)
-                                  for k, v in feats.items()})
-            block["file"] = name          # normalise_like maps per file
-            rows.append(block)
-            meta_rows.append(pd.DataFrame({
-                "file": name, "row": idx, "id": sub["id"].to_numpy(),
-                "obsid": sub["obsid"].to_numpy(),
-                "substrate_snr": sub["snr"].to_numpy(),
-                "n_beams": sub["n_beams"].to_numpy(),
-                "injected_snr": float(snr), "drift_hz_s": float(drift),
-                "kind": "control" if snr == 0 else "injected"}))
+        for cls in classes:
+            sub = select_substrates(cat, n_per_class, max_snr=max_snr,
+                                    beams=SUBSTRATE_CLASSES[cls], seed=seed)
+            if sub.empty:
+                say(f"  {name}/{cls}: no substrates in this class")
+                continue
+            idx = sub["row"].to_numpy().astype(int)
+            # The documented corrupt block in uhf_long raises OSError per row,
+            # so a six-file run must not die hours in on one bad stamp.
+            stamps, keep = [], []
+            with h5py.File(h5_path, "r") as h:
+                for i, r in enumerate(idx):
+                    try:
+                        stamps.append(h["data"][int(r)])
+                        keep.append(i)
+                    except Exception:
+                        n_unreadable += 1
+            if not stamps:
+                say(f"  {name}/{cls}: no readable stamps")
+                continue
+            sub = sub.iloc[keep].reset_index(drop=True)
+            cube = np.stack(stamps)
+            idx = sub["row"].to_numpy().astype(int)
+
+            # Hoisted: sigma depends on the substrate, not on the variant.
+            work = cube[:, 0] if cube.ndim == 4 else cube
+            sigma = noise_sigma(work)
+            ok = np.isfinite(sigma) & (sigma > 0)
+            say(f"  {name}/{cls}: {len(sub)} substrates, "
+                f"SNR {sub.snr.min():.1f}-{sub.snr.max():.1f}, "
+                f"{int((~ok).sum())} with degenerate noise")
+
+            df_hz = float(abs(sub["foff"].iloc[0]) * 1e6)
+            dt_s = float(sub["tsamp"].iloc[0])
+            if sub["tsamp"].nunique() > 1 or sub["foff"].nunique() > 1:
+                say(f"    WARNING: {name} mixes foff/tsamp; injections use "
+                    f"row 0's values (df={df_hz:.4f} Hz, dt={dt_s:.3f} s)")
+
+            for snr, drift in [(0.0, 0.0)] + [(s_, d) for s_ in snr_grid
+                                              for d in drift_grid]:
+                # The control traverses inject() too -- amplitude_for_snr
+                # returns 0 at snr=0 -- so no asymmetry of code path can enter
+                # the one comparison the whole experiment rests on.
+                c = inject(cube, sub, snr=snr, drift_hz_s=drift,
+                           bandwidth_hz=bandwidth_hz)
+                feats = stamp_features(c, sub, crop_channels=crop)
+                block = pd.DataFrame({k: np.asarray(v, dtype=np.float64)
+                                      for k, v in feats.items()})
+                block["file"] = name
+                rows.append(block)
+
+                g = signal_profile(work.shape[1], min(int(sub["numChannels"].min()),
+                                                      work.shape[2]),
+                                   df_hz=df_hz, dt_s=dt_s, drift_hz_s=drift,
+                                   bandwidth_hz=bandwidth_hz)
+                ded = np.array([dedoppler_snr(g, amplitude_for_snr(g, sg, snr), sg)
+                                if o else np.nan for sg, o in zip(sigma, ok)])
+                meta_rows.append(pd.DataFrame({
+                    "file": name, "row": idx, "id": sub["id"].to_numpy(),
+                    "obsid": sub["obsid"].to_numpy(),
+                    "substrate_class": cls,
+                    "substrate_snr": sub["snr"].to_numpy(),
+                    "n_beams": sub["n_beams"].to_numpy(),
+                    "noise_sigma": sigma, "injected_ok": ok,
+                    "injected_snr": float(snr), "dedoppler_snr": ded,
+                    "drift_hz_s": float(drift),
+                    "kind": "control" if snr == 0 else "injected"}))
 
     if not rows:
-        raise SystemExit("no substrates: check the workspace has catalogues "
+        raise ValueError("no substrates: check the workspace has catalogues "
                          "and HDF5 files")
+    if n_unreadable:
+        say(f"  {n_unreadable} stamps were unreadable and were skipped")
 
     new_raw = pd.concat(rows, ignore_index=True)
     out = pd.concat(meta_rows, ignore_index=True)
     say(f"normalising {len(new_raw):,} stamps on each file's own transform...")
-    norm = normalise_like(feature_table, new_raw, raw_cols)
+    norm, oor = normalise_like(feature_table, new_raw, raw_cols)
+    out["frac_out_of_range"] = oor
 
     say("scoring, each with the fold that held its observation out...")
-    score, n_fallback = E.predict_held_out(
+    score, fold_used, n_fallback = E.predict_held_out(
         models, fold_of_group, norm[n_cols].to_numpy(), out["obsid"].to_numpy())
     out["rfi_score"] = score
+    out["fold_used"] = fold_used
+    out["fold_was_fallback"] = np.asarray(fold_used) < 0
     if n_fallback:
-        say(f"  WARNING: {n_fallback} rows had no held-out fold and used fold 0")
+        say(f"  WARNING: {n_fallback} rows had no held-out fold (flagged)")
 
-    # The floor: what the shipped pipeline says about these same hits.
+    if feature_table["id"].duplicated().any():
+        raise ValueError("feature_table has duplicate ids; stored_score would "
+                         "misalign")
     stored = feature_table.set_index("id")
     keep = out["id"].isin(stored.index)
-    sc, _ = E.predict_held_out(
-        models, fold_of_group,
-        stored.loc[out.loc[keep, "id"], n_cols].to_numpy(),
-        out.loc[keep, "obsid"].to_numpy())
-    out.loc[keep, "stored_score"] = sc
-    out["n_fallback"] = n_fallback
+    out["stored_score"] = np.nan
+    if keep.any():
+        sc, _, _ = E.predict_held_out(
+            models, fold_of_group,
+            stored.loc[out.loc[keep, "id"], n_cols].to_numpy(),
+            out.loc[keep, "obsid"].to_numpy())
+        out.loc[keep, "stored_score"] = sc
     return out

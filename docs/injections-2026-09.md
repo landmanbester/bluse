@@ -1,141 +1,217 @@
 # Synthetic injections — the first ground truth
 
-**Measured 2026-09-03.** 900 substrates (150 each from six files), 21
-injection settings, 19,800 stamps through the real feature path. Reproduce with
-`bluse-score` for the model and the harness in `src/bluse/injections.py`.
+**Measured 2026-09-03, re-run after review.** 2,160 substrates (120 per beam
+class per file, six files), 21 injection settings, 47,520 stamps through the
+real feature path.
 
-Spec context: [`track-e-2026-09.md`](track-e-2026-09.md) §8, falsification
-risks 1 and 2 — this answers both, and not in Track E's favour.
+> **This document replaces a first version whose headline was wrong twice
+> over.** Both errors were found by review of PR #3 and both are recorded in §7,
+> because the corrections are more instructive than the original. In short: the
+> SNR axis was mis-derived by a factor of √2, and the headline retention number
+> was a composition effect from a substrate set that was 42% confirmed
+> multi-beam RFI.
+
+Context: [`track-e-2026-09.md`](track-e-2026-09.md) §8, falsification risks 1
+and 2.
 
 ---
 
-## 1. What this buys that nothing else could
+## 1. What this buys
 
-Every Track E number measures agreement with the multi-beam spatial filter. The
-filter is a good instrument and it is **not truth**: no hit in this survey is
-confirmed clean, so "0.9899 ROC-AUC" says two instruments agree.
+Every Track E number measures agreement with the multi-beam spatial filter — a
+good instrument, not truth. No hit in this survey is confirmed clean. An
+injected signal is one we built, so we know the answer.
 
-An injected signal is one we built, so we know the answer. That makes three
-previously unanswerable questions answerable, and the first of them is the one
-the whole score is blocked on: **what threshold keeps a real signal?**
+## 2. The units, and how to convert them
 
-## 2. The three checks that had to pass first
+The injected strength is a **matched-filter SNR**: for a template `g` the filter
+weights the data by `g`, giving `SNR = A·√(Σg²)/σ`. That is independent of how
+many channels and timesteps the signal occupies, so it means the same thing in
+every band.
 
-A harness that measures itself is worse than no harness. Each of these was
-measured, and the third found a defect in our understanding of the pipeline.
+It is **not** seticore's SNR and must not be compared against the catalogue's
+`snr` column. The harness records the single-channel dedoppler equivalent per
+stamp, which is:
 
-| check | why it matters | result |
-|---|---|---|
-| re-extraction is exact | if control features differ from the stored ones, everything after is measuring the harness | **all 12 raw columns bit-identical** |
-| scoring is held out | the substrate is a real hit and is IN the training set | fold ensemble that excluded its `obsid` |
-| normalisation is exact | any error here is a floor under the effect | **0.000e+00** across 3,000 rows |
-
-The third took three attempts. Refitting `features.normalise` on the union
-moved scores by **0.070 mean absolute** — four times the seed noise, enough to
-swamp the effect — because `QuantileTransformer` redraws its 200,000-row
-subsample when the array length changes. Interpolating on the stored
-`(raw, raw_n)` curve cut it to **0.127**, still wrong. The residual was one raw
-value mapping to two normalised values, which should be impossible.
-
-**It is possible because the normalisation is fitted per file.**
-`bluse-features` calls `normalise()` inside `extract()`, once per file, and
-`summarise()` concatenates without re-normalising. A `_n` value is a rank
-*within its own file*, not within the survey: `x01_drift_residual = 0.2790005`
-is **0.1523** in `lband_long` and **0.0253** in `mk_sample_hits`. Interpolating
-per file gives exactly zero residual. This was not documented anywhere and it
-is not what "normalised feature" implies.
-
-## 3. The result
-
-`plots/track_e_injection_retention.png`. Fraction of injected signals a cut at
-the shipped `shortlist_below=0.1` would **keep**:
-
-| injected SNR | 5 | 8 | 12 | 20 | **35** | 60 | 100 |
+| harness SNR | 5 | 8 | 12 | 20 | 35 | 60 | 100 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| drift 0.3 Hz/s | 0.376 | 0.372 | 0.381 | 0.386 | **0.430** | 0.399 | 0.204 |
-| drift 0.1 Hz/s | 0.280 | 0.286 | 0.296 | 0.287 | 0.283 | 0.263 | 0.148 |
-| drift 0.0 Hz/s | 0.230 | 0.234 | 0.228 | 0.202 | 0.157 | 0.093 | **0.006** |
+| **≈ catalogue-style SNR** | 2.5 | 4.1 | 6.1 | 10.2 | 17.8 | 30.6 | 50.9 |
 
-Control — the same substrates with nothing injected — is **0.108**.
+So the grid spans roughly catalogue SNR 2.5–51 — ordinary survey brightness, not
+an exotic tail. Every conclusion below is quoted in both units.
 
-Three things, and two of them are limitations.
+## 3. The three pre-checks
 
-**The score does respond to a real signal.** Retention rises from 11% to 43%,
-and the paired shift is negative at every setting below SNR 100: adding a real
-drifting carrier makes a hit look less like multi-beam RFI, by −0.15 to −0.44
-in score.
+A harness that measures itself is worse than none.
 
-**But it keeps at most 43% of them.** At the shipped threshold, **more than
-half of injected real signals would be cut.** Whatever else this experiment
-established, it establishes that 0.1 is not a defensible operating point for
-anyone who cares about not discarding signals. At 0.5 the best case is 65%.
+| check | result |
+|---|---|
+| re-extraction reproduces the stored features | all 12 raw columns **bit-identical** |
+| new data scored by a model that never saw its observation | `fold_models` / `predict_held_out`, pinned by an **exact** equality test against `fit_score` |
+| normalisation floor | **0.000e+00**; `stored` and `control` scores agree exactly |
+| values outside the trained range | recorded per row; **max 2 of 12 columns** |
 
-**And it gets worse as the signal gets brighter.** Retention peaks near SNR 35
-and collapses: at SNR 100 with no drift it is **0.006**, and the paired shift
-turns **positive (+0.066)** — a bright carrier is scored as *more* RFI-like
-than the noise it replaced. This is falsification risk 2 confirmed.
+The normalisation check took three attempts and found something undocumented:
+**the `_n` columns are fitted per file.** `bluse-features` calls `normalise()`
+inside `extract()` once per file and `summarise()` concatenates without
+re-normalising, so `x01_drift_residual = 0.2790005` is 0.1523 in `lband_long`
+and 0.0253 in `mk_sample_hits`. The mechanism for a refit shift is per-file
+**min–max** rescaling — `unit` and `log-unit` cover 8 of the 12 stamp columns
+and **none of the 12 is a quantile transform**, contrary to what the first
+version of this document claimed.
 
-## 4. Why the reversal happens
+## 4. The result, stratified — because pooling it is what broke it
 
-Not extrapolation: at SNR 100 **no injected feature falls outside the range the
-model was trained on** (checked per column, per file), so the model is
-interpolating throughout.
+Substrate class is the largest single effect in the experiment. Reported
+separately, always.
 
-The mechanism is visible in the features. Median `f04_spectral_skew` against
-injected SNR, `sband_short`:
+### The deployment population: single-beam substrates (n=720)
 
-| injected SNR | control | 5 | 20 | 60 | 100 | 300 |
+These are the hits the score is actually applied to. Control retention at the
+shipped `shortlist_below=0.1` is **0.428**.
+
+Fraction kept by a cut at 0.1:
+
+| drift \ harness SNR | 5 | 12 | 20 | 35 | 60 | 100 |
 |---|---:|---:|---:|---:|---:|---:|
-| median `f04` | 1.87 | 0.22 | 1.51 | 2.66 | 2.88 | 3.04 |
+| 0.3 Hz/s | 0.544 | 0.540 | **0.581** | 0.564 | 0.346 | 0.188 |
+| 0.1 Hz/s | 0.496 | 0.489 | 0.418 | 0.343 | 0.161 | 0.068 |
+| 0.0 Hz/s | 0.499 | 0.362 | 0.174 | 0.097 | 0.019 | 0.003 |
 
-The file's own median is **3.99**. So as the injected signal brightens, the
-stamp's morphology converges toward *what a typical hit in this file looks
-like* — and a typical hit is RFI.
+Paired shift, same substrate, injected − control:
 
-That is the honest statement of the limit: **a bright narrowband carrier is a
-bright narrowband carrier.** Morphology cannot separate origin at high SNR,
-because there is nothing morphological to separate. What separates them is beam
-multiplicity — the thing the score deliberately refuses to look at, which is
-exactly what made it useful on single-beam hits and exactly what makes it blind
-here.
+| drift \ harness SNR | 5 | 12 | 20 | 35 | 60 | 100 |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.3 Hz/s | −0.192 | −0.193 | −0.209 | −0.201 | **+0.011** | **+0.178** |
+| 0.0 Hz/s | −0.129 | −0.085 | **+0.056** | **+0.211** | **+0.358** | **+0.469** |
 
-## 5. What it means for the shipped score
+**The response is modest and it reverses.** Injecting a real drifting signal
+lifts retention from 0.428 to at best **0.581** — a 15-point gain, not the
+transformation the first draft implied. Above catalogue SNR ≈ 10 (zero drift) or
+≈ 30 (0.3 Hz/s) the shift turns **positive**: the injection makes the hit look
+*more* like RFI than the noise it replaced.
 
-- **Pruning survives.** "This looks like RFI, vet it last" is unaffected: the
-  score's high end is where it was trained and where it is reliable. The
-  2,988-hit pruned set is not undermined by anything here.
-- **The shortlist is weaker than it looked.** It keeps ~40% of real signals in
-  the best case, so it is a *ranking with a known miss rate*, not a filter. It
-  should not be used to discard.
-- **Do not trust the score on very bright hits.** Above SNR ~60 it inverts.
-  Any operational use should either exclude the bright tail or carry the
-  caveat.
-- **Drift is doing the work.** A zero-drift injection is scored as RFI at every
-  brightness. Consistent with `f02`'s odds ratio of 2.96, and it means the
-  score inherits the classical filter's blindness to a non-drifting sky signal.
+### Pruning is NOT unaffected — this is the correction that matters most
 
-## 6. The caveat this design carries
+The first version claimed the 2,988-hit pruned set was untouched by any of
+this. Measured directly, fraction of injected signals pushed **above the
+pruning threshold of 0.9**, single-beam substrates:
 
-**Every injection sits on top of a real hit.** There is no empty cube in this
-archive; the substrates are hits near the detection floor, and their controls
-score 0.82 on average — they are mostly RFI themselves. So these retention
-numbers are a **lower bound**: they measure "does adding a real signal to an
-RFI-contaminated stamp make it look clean", which is harder than the question
-we would like to answer.
+| drift \ harness SNR | control | 5 | 20 | 35 | 60 | 100 |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.0 Hz/s | 0.335 | 0.199 | 0.228 | 0.504 | 0.740 | **0.914** |
+| 0.3 Hz/s | 0.335 | 0.139 | 0.114 | 0.126 | 0.321 | 0.490 |
 
-The alternative — fully synthetic cubes with noise matched to real stamp
-statistics — was considered and not taken, on the grounds that a wrong noise
-model makes injections trivially separable for the wrong reason. **Running both
-and comparing is the obvious next experiment**, and the difference between them
-would itself measure how much the substrate matters.
+**At catalogue SNR ≈ 51 with no drift, 91% of injected real signals land in the
+pruned bin.** A bright non-drifting sky signal would be actively discarded, not
+merely ranked low. The claim that pruning survives was wrong and is withdrawn.
 
-## 7. What would change these conclusions
+### Injecting into known RFI clears it (n=720 multibeam)
 
-1. **A clean-substrate run.** If synthetic cubes give 90% retention where these
-   give 43%, the limit is substrate contamination rather than the score, and
-   the operating point is recoverable.
-2. **A wider drift grid.** 0.3 Hz/s is the best of three values tested and the
-   curve is still rising at the edge. The real distribution runs further.
-3. **Injecting into more than one beam.** A terrestrial emitter appears in
-   many; ours appears in one, by construction. Injecting the same signal across
-   a beam set would test the filter and the score against each other directly.
+Control retention **0.001** — the score is confident and correct about these.
+Superimposing a drifting carrier moves them into the shortlist up to **46%** of
+the time (harness 35, drift 0.3), with paired shifts to −0.58.
+
+That is a demonstrated false-**negative** pathway: a real signal coincident with
+a known interferer drags the interferer into the candidate list. It is also the
+strongest available argument that a low score is not evidence of anything.
+
+## 5. What is safe to say
+
+**Safe.**
+- The score's discriminating power degrades at high brightness. Corroborated
+  three ways: the injection reversal here; `report.json`'s `snr_stratified`
+  deciles, where within-decile AUC falls from 0.996 at catalogue SNR 14–30 to
+  0.61 at 498–777; and `candidates.csv`, where real single-beam survivors go
+  from 26% shortlist retention at catalogue SNR 10–15 to 1.5% above 300.
+- A low score is not evidence of a sky signal — §4's RFI-clearing result makes
+  this concrete rather than cautionary.
+- The shortlist is a ranking with a **measured** miss rate: on the deployment
+  population it keeps 43% of nothing-injected and at best 58% with a signal
+  present.
+
+**Not safe, and withdrawn.**
+- ~~"Pruning is unaffected."~~ False; 91% false-pruning at the bright end.
+- ~~"A cut at 0.1 keeps at most 43% of injected real signals."~~ A composition
+  effect. On single-beam substrates it is 43% *with nothing injected*.
+- ~~"Morphology cannot separate origin at high SNR."~~ A causal claim resting on
+  a synthetic morphology no real signal has (§6).
+- ~~"Above SNR ~60 it inverts."~~ Right direction, wrong units, and the
+  reversal point depends on drift: catalogue ≈10 at zero drift, ≈30 at
+  0.3 Hz/s.
+
+## 6. What this design still cannot tell us
+
+**The injection is a mean-power model.** It adds a noiseless, unmodulated,
+perfectly linear ridge. Real integrated power adds a cross-term whose variance
+grows with signal power, so a real detection of the same brightness fluctuates
+where ours does not — median `f10_timeseries_std` *falls* with injected
+brightness because a constant-in-time ridge raises the mean and not the
+standard deviation. The high-SNR reversal may be partly a property of this
+morphology rather than of morphology in general. **A Gamma-fluctuating
+injection is ~10 lines and is the cheapest test of the whole result.**
+
+**Bandwidth is fixed at 3.0 Hz** and never swept, though it drives
+`f12_bandwidth_hz` and `f11_spectrum_std` directly. A real carrier is
+unresolved at ~1 Hz channelisation; ours is not.
+
+**The drift arms are not matched in feature space.** Seven of the twelve stamp
+features come from the time-integrated spectrum, and at fixed matched-filter SNR
+a drifting signal is several times less prominent there than a stationary one.
+"Drift is doing the work" may partly reduce to "drifting signals perturb the
+spectral features less".
+
+**The substrate is never empty.** There is no empty cube in this archive.
+Note the bound runs in opposite directions for the two quantities: a cleaner
+substrate can only *raise* retention, but the paired shift is largest on RFI
+substrates and near zero on the cleanest, so the pooled shift is an **upper**
+bound on the response. The first version claimed a single lower bound over both.
+
+## 7. What the first version got wrong
+
+Kept because the corrections are the useful part.
+
+**The SNR formula was not the matched filter.** It used
+`A·Σg/(σ·√Σg²)` — a unit-weight numerator with a matched-filter denominator,
+not a consistent filter at all. Monte Carlo: asking for 20 delivered **14.19**,
+a factor of 1/√2. For the shipped Gaussian grid the error was a near-constant
+√2 rescale (1.4142 across bands and drifts, worst deviation 0.4%), so no
+qualitative conclusion moved — but it is genuinely profile-dependent once
+bandwidth is swept, and an unresolved 0.8 Hz carrier gives 1.678 at zero drift
+against 1.389 at 0.3 Hz/s. Found by Copilot. The test that should have caught it
+asserted the algebraic inverse of the function under test, so it could not fail;
+it now measures the real statistic by simulation.
+
+**The substrate set was 42% confirmed multi-beam RFI.**
+`select_substrates` filtered on `snr <= 8` alone, and low SNR does not imply few
+beams: the draw was 42.4% multibeam, 44.4% ambiguous, **13.1% single-beam**. The
+pooled "43% retention" mixed a population the score is deployed on with one it
+was trained to reject, and the two respond in opposite directions. Substrates
+are now sampled per class and reported per class.
+
+**The refit-shift diagnosis was misattributed.** Blamed on
+`QuantileTransformer` redrawing its subsample; none of the 12 stamp columns uses
+a quantile transform. The mechanism is per-file min–max.
+
+**`stored_score` was described as the shipped pipeline's score.** It is a
+harness self-consistency check computed from one fold's ensemble, and the
+"mean 0.017" attached to it was stale — it is exactly zero.
+
+## 8. Next, in value order
+
+1. **Gamma-fluctuating injection** (§6). Cheapest test of whether the reversal
+   is physics or a noiseless ridge. Do this before anything else.
+2. **An injected-vs-real discriminator** on the same 12 features, matched on
+   achieved dedoppler SNR. If it separates them at high SNR the model is
+   extrapolating and the bright arm has a validity ceiling; "no feature outside
+   the trained range" is necessary and not sufficient, because 256 bins make the
+   top edge and far beyond it identical.
+3. **Bandwidth in the grid**, including an unresolved carrier.
+4. **A drift-matched column** normalising on integrated-spectrum prominence
+   instead, to separate drift from the normalisation choice.
+5. **Real empty substrates**, selected on `x01_drift_residual` near its
+   pure-noise value (≈ 60/√12 = 17.3 channels) rather than on catalogue SNR —
+   the emptiest real cubes available, with no noise model to get wrong.
+6. **A threshold sweep with the cost axis** — retention against shortlist size
+   — which is the operating point this experiment set out to produce and still
+   has not.

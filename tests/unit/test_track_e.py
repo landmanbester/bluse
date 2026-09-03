@@ -211,3 +211,69 @@ def test_n_seeds_below_one_raises():
     df = fixtures.synthetic_weak_labelled(n=600, groups=6, seed=0)
     with pytest.raises(ValueError, match="at least 1"):
         E.fit_score(df, features="all", n_splits=3, n_seeds=0)
+
+
+def test_predict_held_out_agrees_exactly_with_fit_score():
+    """
+    The no-leak property of the injection harness rests entirely on
+    fold_models/predict_held_out, and PR #3's review pointed out that neither
+    had a test.
+
+    Agreement must be EXACT, not approximate: both average the same n_seeds
+    models over the same GroupKFold split, so any difference means the two
+    training loops have diverged -- which they can, because fold_models
+    duplicates fit_score's loop without its all-NaN column drop.
+    """
+    import numpy as np
+
+    df = fixtures.synthetic_weak_labelled(n=3000, groups=9, seed=4)
+    score, fold, _ = E.fit_score(df, features="all", n_splits=3, n_seeds=2)
+    models, fold_of_group = E.fold_models(df, features="all", n_splits=3,
+                                          n_seeds=2)
+    lab = df.weak_label.to_numpy() >= 0
+    got, fold_used, n_fb = E.predict_held_out(
+        models, fold_of_group, df.loc[lab, E.feature_columns("all")].to_numpy(),
+        df.loc[lab, "group_id"].to_numpy())
+    assert n_fb == 0
+    assert np.array_equal(fold_used, fold[lab])
+    assert np.allclose(got, score[lab], atol=0, rtol=0)
+
+
+def test_no_group_is_scored_by_a_fold_that_trained_on_it():
+    """
+    The property the whole injection result depends on. An injected stamp sits
+    on a real hit that is IN the training set, so scoring it with a model that
+    saw its own substrate leaks the substrate's morphology in through a side
+    door -- exactly what the group split exists to prevent.
+    """
+    import numpy as np
+    from sklearn.model_selection import GroupKFold
+
+    df = fixtures.synthetic_weak_labelled(n=3000, groups=9, seed=5)
+    models, fold_of_group = E.fold_models(df, features="all", n_splits=3,
+                                          n_seeds=1)
+    y = df.weak_label.to_numpy()
+    g = df.group_id.to_numpy()
+    tr_idx = np.flatnonzero(y >= 0)
+    trained_on = {k: set(g[tr_idx[tr]]) for k, (tr, _) in
+                  enumerate(GroupKFold(3).split(tr_idx, y[tr_idx], g[tr_idx]))}
+    for group, k in fold_of_group.items():
+        assert group not in trained_on[k], (group, k)
+
+
+def test_an_unmapped_group_is_flagged_rather_than_silently_scored():
+    """
+    A group absent from fold_of_group falls back to a model that MAY have seen
+    it. That has to be attributable per row, not counted at run level -- a
+    scalar count gives no way to exclude the affected rows from a headline.
+    """
+    import numpy as np
+
+    df = fixtures.synthetic_weak_labelled(n=2000, groups=8, seed=6)
+    models, fold_of_group = E.fold_models(df, features="all", n_splits=4,
+                                          n_seeds=1)
+    X = df[E.feature_columns("all")].to_numpy()[:5]
+    groups = np.array(["obs000", "NOT_A_GROUP", "obs001", "NOT_A_GROUP", "obs002"])
+    _, fold_used, n_fb = E.predict_held_out(models, fold_of_group, X, groups)
+    assert n_fb == 2
+    assert list(fold_used < 0) == [False, True, False, True, False]
