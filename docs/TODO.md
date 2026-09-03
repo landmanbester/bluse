@@ -438,15 +438,15 @@ clusters — use DBCV if the `hdbscan` backend lands); removing the batching
 loop; making the embedding an input to the clusterer; rotation or
 frequency-flip augmentations anywhere near this data.
 
-**DATA EXPOSURE — UNRESOLVED, 2026-09-03.** This section said "do not make the
-repository public". **The repository is public** (`gh repo view` reports
-PUBLIC), and the tracked derived tables — `catalogues/*_survivors.csv`,
-`scores/candidates.csv` (3,028 distinct `sourceName`), `scores/contrarian.csv`,
-`scores/injections.parquet` (2,160 real hits over 362 observations) — are
-world-readable. Whether clearance was obtained is **not recorded anywhere and
-must not be inferred from the repository being public**. Answer it, record it in
-`AGENTS.md`, and if the answer is no, gitignore the tables and rewrite history
-rather than deleting at HEAD.
+**Repository visibility — RESOLVED 2026-09-03.** The repository is public and
+that was cleared with the BLUSE team. The tracked derived tables
+(`catalogues/*_survivors.csv`, `scores/candidates.csv`,
+`scores/contrarian.csv`, `scores/injections.parquet`) are therefore readable by
+anyone. **Publishing the repository is not publishing the data**: those tables
+carry sky coordinates, `sourceName`, `obsid` and row indices that remain SARAO /
+Breakthrough Listen property, the MIT licence does not extend to them, and
+Czech et al. 2026 destines these results for forthcoming publications. See
+`AGENTS.md` § Licensing.
 
 Otherwise: do not redistribute catalogue data Tracked survivor CSVs contain sky
 coordinates, Gaia/exotica source names and obsids from unpublished data

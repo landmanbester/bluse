@@ -469,25 +469,25 @@ sky coordinates, Gaia and exotica source identifiers, observation IDs and row
 indices belonging to SARAO / Breakthrough Listen. Czech et al. 2026 states those
 survey results are destined for forthcoming publications.
 
-> **UNRESOLVED, 2026-09-03 — needs an answer from the repository owner.** This
-> section said "the repository is **private** for that reason". **It is not:
-> `gh repo view` reports PUBLIC.** The tracked derived tables are therefore
-> world-readable, and they are not small:
->
-> | file | rows | identifiers |
-> |---|---:|---|
-> | `catalogues/*_survivors.csv` | ~7,100 | coordinates, `sourceName`, `obsid` |
-> | `scores/candidates.csv` | 4,565 | `id`, `obsid`, **3,028 distinct `sourceName`** |
-> | `scores/contrarian.csv` | 3,303 | `id`, `obsid` |
-> | `scores/injections.parquet` | 47,520 | `id`, `obsid`, `row` — 2,160 real hits over 362 observations |
->
-> Whether clearance was obtained before the repository was made public is
-> **not recorded anywhere in this repository, and must not be assumed from the
-> fact that it is public.** Record the answer here, with who gave it and when.
-> If clearance was not obtained, the derived tables should be gitignored and the
-> history rewritten, not merely deleted at HEAD.
+**The repository is public, and that was cleared with the BLUSE team**
+(confirmed by the repository owner, 2026-09-03). Publication of the *repository*
+is not publication of the *data*: the carve-out above still stands, and these
+tracked tables carry hit-level identifiers that remain SARAO / Breakthrough
+Listen property —
 
-Clear it with the BLUSE team before redistributing any of it.
+| file | rows | identifiers |
+|---|---:|---|
+| `catalogues/*_survivors.csv` | ~7,100 | coordinates, `sourceName`, `obsid` |
+| `scores/candidates.csv` | 4,565 | `id`, `obsid`, 3,028 distinct `sourceName` |
+| `scores/contrarian.csv` | 3,303 | `id`, `obsid` |
+| `scores/injections.parquet` | 47,520 | `id`, `obsid`, `row` — 2,160 real hits over 362 observations |
+
+— so they are readable by anyone, and reuse of them is still the BLUSE team's
+call rather than the MIT licence's. Czech et al. 2026 states these survey
+results are destined for forthcoming publications; **cite that paper, and ask
+before building on the derived tables.**
+
+
 
 ## Key references
 

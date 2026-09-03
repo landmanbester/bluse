@@ -48,8 +48,17 @@ three days:
 - a headline AUC that silently mixed accuracy with distribution shift
   ([#12](02-wrong-turns.md)).
 
-No record is a known gap. A wrong record is believed. The pattern is identical
-each time: two code paths, one of them updated.
+A fourth instance is not about code at all: `AGENTS.md` stated *"the repository
+is **private** for that reason"* as the project's entire record of how
+unpublished survey data was protected, while the repository was public
+([#24](02-wrong-turns.md)). Publication had in fact been cleared, so no harm —
+but nothing recorded the clearance and the file that should have was asserting
+its opposite.
+
+No record is a known gap. A wrong record is believed. For code the pattern is
+identical each time — two paths, one of them updated. For facts about the world
+it is worse, because a protection described in a file is the thing people check
+*instead of* checking reality.
 
 The defence that worked was making tests assert **the written artefact against
 the computation**, not against itself — refit from the recorded parameters and

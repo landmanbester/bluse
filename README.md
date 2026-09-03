@@ -619,4 +619,11 @@ threshold **91%** of the time. Run them with `bluse-inject --fluctuate`. See
 ## Licence
 
 MIT — see [`LICENSE`](LICENSE). **Code and documentation only.** It does not
-extend to the BLUSE observational data or to catalogues derived from it.
+extend to the BLUSE observational data, nor to the derived per-hit tables in
+`aug_2026_workshop/catalogues/` and `aug_2026_workshop/scores/`.
+
+This repository is public, cleared with the BLUSE team. **That publishes the
+repository, not the data.** Those tables carry sky coordinates, `sourceName`,
+`obsid` and row indices that remain SARAO / Breakthrough Listen property, and
+Czech et al. 2026 destines these survey results for forthcoming publications —
+cite it, and ask the BLUSE team before building on the derived tables.

@@ -1,4 +1,4 @@
-# Twenty-three wrong turns
+# Twenty-four wrong turns
 
 The useful part of the record. Each entry: what we believed, what was true, how
 it surfaced, and what it cost.
@@ -7,7 +7,7 @@ Read the **How it surfaced** line first. Counted honestly:
 
 | how it surfaced | n |
 |---|---:|
-| **adversarial review** (Copilot ×3, human reviewer ×3) | **6** |
+| **adversarial review** (Copilot ×3, human reviewer ×4) | **7** |
 | ran the planned experiment and believed the answer | 4 |
 | investigated a result that felt implausible | 3 |
 | reconciled two numbers that disagreed | 2 |
@@ -321,6 +321,25 @@ validity ceiling is **unresolved rather than established**. Reported as such.
 The lesson is narrow and useful: a control that returns the expected floor does
 not make a comparison unconfounded.
 
+### 24 — A file described a protection that did not exist
+
+**Believed:** `AGENTS.md` said *"The repository is **private** for that
+reason"*, and that sentence was the project's whole record of how the
+unpublished-survey data was being protected.
+**True:** the repository was public. The tracked derived tables —
+`candidates.csv` with 3,028 distinct `sourceName`, `injections.parquet` with
+2,160 real hits over 362 observations — were world-readable.
+**Surfaced:** review, checking a licensing claim against `gh repo view`.
+**Resolution:** the owner had in fact cleared publication with the BLUSE team.
+So no harm, and the failure is entirely documentary — **nothing in the
+repository recorded the clearance, and the file that should have was asserting
+the opposite.**
+
+This is [lesson 3](03-what-it-taught-us.md) — *a record that disagrees with the
+computation is worse than no record* — applied to a fact rather than a number,
+and it is the worst case of the four, because a protection described in a file
+and absent in fact is the one people check instead of checking reality.
+
 ---
 
 ## The tally
@@ -332,7 +351,7 @@ not make a comparison unconfounded.
 | shipped without meeting its acceptance criterion | 1 |
 | unambiguous wins | 1 — from the backlog, on the last night |
 | **of that win's published conclusions, later withdrawn** | **4 of 8** |
-| defects where the record disagreed with the computation | **3** |
-| defects found by adversarial review rather than by us | **6** |
+| defects where the record disagreed with reality | **4** |
+| defects found by adversarial review rather than by us | **7** |
 | tests that could not have failed | **3** |
 | claims I listed as *safe as stated* that were not | **1** |

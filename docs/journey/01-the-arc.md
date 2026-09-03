@@ -224,5 +224,11 @@ which the first write-up called "not a defensible operating point", turns out
 to be **the best of every threshold swept**, by injected signal kept per
 survivor admitted.
 
-The day's last finding was a data-handling one, and it is still open:
-`AGENTS.md` said *"the repository is private for that reason"*. It is not.
+The day's last finding was a data-handling one. `AGENTS.md` said *"the
+repository is **private** for that reason"* — it was not, and the tracked
+derived tables carrying `sourceName` and `obsid` for thousands of real hits were
+world-readable. That turned out to be fine: the repository owner had cleared
+publication with the BLUSE team. But **nothing in the repository recorded it**,
+and the document that should have was still asserting the opposite. A protection
+described in a file and absent in fact is worse than no protection described,
+because it is the one people check.
