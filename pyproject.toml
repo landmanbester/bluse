@@ -54,6 +54,7 @@ bluse-bench    = "bluse.bench.app:main"
 bluse-score    = "bluse.track_e_score:main"
 bluse-score-plots = "bluse.track_e_plots:main"
 bluse-score-slides = "bluse.track_e_slides:main"
+bluse-inject   = "bluse.injections:main"
 
 [build-system]
 requires = ["uv_build>=0.9.0,<0.12.0"]

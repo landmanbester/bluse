@@ -1,8 +1,12 @@
 # Synthetic injections — the first ground truth
 
-**Measured 2026-09-03, re-run after review.** 2,160 substrates (120 per beam
-class per file, six files), 21 injection settings, 47,520 stamps through the
-real feature path.
+**Measured 2026-09-03, re-run twice after review.** 2,160 substrates (120 per
+beam class per file, six files), 21 injection settings, 47,520 stamps through
+the real feature path, **Gamma-fluctuating injection**. One command:
+
+```bash
+bluse-inject --fluctuate          # ~85 s; writes scores/injections{,_report}.parquet
+```
 
 > **This document replaces a first version whose headline was wrong twice
 > over.** Both errors were found by review of PR #3 and both are recorded in §7,
@@ -50,6 +54,7 @@ A harness that measures itself is worse than none.
 | new data scored by a model that never saw its observation | `fold_models` / `predict_held_out`, pinned by an **exact** equality test against `fit_score` |
 | normalisation floor | **0.000e+00**; `stored` and `control` scores agree exactly |
 | values outside the trained range | recorded per row; **max 2 of 12 columns** |
+| the injection is physically shaped | Gamma(k, 1/k) per sample, k from each stamp's own mean²/variance |
 
 The normalisation check took three attempts and found something undocumented:
 **the `_n` columns are fitted per file.** `bluse-features` calls `normalise()`
@@ -116,6 +121,86 @@ That is a demonstrated false-**negative** pathway: a real signal coincident with
 a known interferer drags the interferer into the candidate list. It is also the
 strongest available argument that a low score is not evidence of anything.
 
+## 4b. Two things the review asked for, and what they returned
+
+### The injection model is not the explanation
+
+The first version added a **noiseless, unmodulated ridge** — a morphology no
+real detection has, because real integrated power adds a cross-term whose
+variance grows with signal power. Measured, that showed up exactly where review
+predicted: median `f10_timeseries_std` *fell* with injected brightness
+(0.0347 → 0.0288), i.e. the stamp got smoother in time than pure noise.
+
+Multiplying the added power by Gamma(k, 1/k), with k = mean²/variance per stamp
+(median 13.7), fixes it: `f10` now runs 0.0347 → 0.0348, flat.
+
+**The reversal survives.** Smooth against fluctuating, single-beam substrates:
+
+| | keep @0.1, SNR 100 drift 0 | prune @0.9, SNR 100 drift 0 |
+|---|---:|---:|
+| smooth ridge | 0.003 | 0.914 |
+| Gamma-fluctuating | 0.007 | **0.925** |
+
+Within a few points everywhere. So the high-SNR reversal and the false-pruning
+are **not** artefacts of a smooth ridge. Everything below is from the
+fluctuating run.
+
+### The injected-vs-real discriminator is confounded, and cannot settle validity
+
+The proposed test — train a classifier to separate injected stamps from real
+hits of matched brightness, on the same 12 features — returns **AUC 0.997–1.000**
+at every setting. Read naively that says the model is extrapolating on every
+injected stamp and its verdict there means nothing.
+
+Two controls say the test cannot support that reading:
+
+| comparison | AUC |
+|---|---:|
+| real hits vs *other* real hits at matched brightness | **0.479–0.499** |
+| real **faint** hits (catalogue SNR 6–8) vs real hits at SNR ≈32 | **1.000** |
+| our injections vs real hits at matched brightness | 0.997–1.000 |
+
+The first validates the method — it returns chance when there is nothing to
+separate. The second is fatal to the inference: **a faint real stamp is already
+perfectly separable from a bright real stamp on these 12 features, with no
+injection involved at all.** Every injection here sits on a faint substrate, so
+"separable from real bright hits" is what a faint substrate does on its own, and
+this design cannot attribute it to the signal model.
+
+**The validity ceiling is therefore unresolved, not established.** A version
+that could settle it has to hold the substrate fixed — two signal models on the
+same substrates, or substrates drawn from the target brightness class rather
+than the detection floor.
+
+Worth noting on its own: that the 12 stamp features separate faint from bright
+real hits at AUC 1.000 is a large fact about this feature space, and it is
+consistent with everything else here about the score being brightness-driven.
+
+## 4c. The operating point
+
+The thing this experiment set out to produce and the first version left out. A
+retention curve alone cannot choose a threshold — keeping everything keeps every
+false positive too. Injected signals at drift 0.3 Hz/s and catalogue SNR ≈6–18,
+against the 2,305 single-beam Track A survivors:
+
+| threshold | injected kept | survivors admitted | | kept per admitted |
+|---|---:|---:|---:|---:|
+| 0.02 | 0.322 | 251 | 10.9% | 2.96 |
+| 0.05 | 0.440 | 300 | 13.0% | 3.38 |
+| **0.10 — shipped** | **0.545** | **346** | **15.0%** | **3.63** |
+| 0.20 | 0.618 | 425 | 18.4% | 3.35 |
+| 0.50 | 0.716 | 540 | 23.4% | 3.06 |
+| 0.90 | 0.875 | 879 | 38.1% | 2.30 |
+
+**The shipped 0.1 is the best of these**, by kept-per-admitted. That was a
+convention when it was chosen and it survives being measured — which is a
+better outcome than the first version's "0.1 is not a defensible operating
+point", and the opposite conclusion.
+
+What it costs is now stated rather than guessed: at 0.1 you keep **55%** of
+injected signals in the favourable regime and admit 15% of survivors. Roughly
+half of real signals in this band are lost to gain a 6.7× reduction in vetting.
+
 ## 5. What is safe to say
 
 **Safe.**
@@ -127,8 +212,11 @@ strongest available argument that a low score is not evidence of anything.
 - A low score is not evidence of a sky signal — §4's RFI-clearing result makes
   this concrete rather than cautionary.
 - The shortlist is a ranking with a **measured** miss rate: on the deployment
-  population it keeps 43% of nothing-injected and at best 58% with a signal
+  population it keeps 43% of nothing-injected and at best 57% with a signal
   present.
+- **The shipped 0.1 threshold is the best of those swept**, by injected-signal
+  kept per survivor admitted (§4c). It was a convention; it now has a number.
+- The high-SNR reversal is **not** an artefact of a noiseless injection (§4b).
 
 **Not safe, and withdrawn.**
 - ~~"Pruning is unaffected."~~ False; 91% false-pruning at the bright end.
@@ -142,14 +230,10 @@ strongest available argument that a low score is not evidence of anything.
 
 ## 6. What this design still cannot tell us
 
-**The injection is a mean-power model.** It adds a noiseless, unmodulated,
-perfectly linear ridge. Real integrated power adds a cross-term whose variance
-grows with signal power, so a real detection of the same brightness fluctuates
-where ours does not — median `f10_timeseries_std` *falls* with injected
-brightness because a constant-in-time ridge raises the mean and not the
-standard deviation. The high-SNR reversal may be partly a property of this
-morphology rather than of morphology in general. **A Gamma-fluctuating
-injection is ~10 lines and is the cheapest test of the whole result.**
+**The Gamma multiply under-represents the cross-term.** It gives the added
+component variance S²/k; the exact term is (S²+2SN)/k. So the injection is still
+*less* noisy than a real detection of the same brightness — the conservative
+direction for the smoothness question, but not exact.
 
 **Bandwidth is fixed at 3.0 Hz** and never swept, though it drives
 `f12_bandwidth_hz` and `f11_spectrum_std` directly. A real carrier is
@@ -199,19 +283,28 @@ harness self-consistency check computed from one fold's ensemble, and the
 
 ## 8. Next, in value order
 
-1. **Gamma-fluctuating injection** (§6). Cheapest test of whether the reversal
-   is physics or a noiseless ridge. Do this before anything else.
-2. **An injected-vs-real discriminator** on the same 12 features, matched on
-   achieved dedoppler SNR. If it separates them at high SNR the model is
-   extrapolating and the bright arm has a validity ceiling; "no feature outside
-   the trained range" is necessary and not sufficient, because 256 bins make the
-   top edge and far beyond it identical.
-3. **Bandwidth in the grid**, including an unresolved carrier.
-4. **A drift-matched column** normalising on integrated-spectrum prominence
-   instead, to separate drift from the normalisation choice.
-5. **Real empty substrates**, selected on `x01_drift_residual` near its
-   pure-noise value (≈ 60/√12 = 17.3 channels) rather than on catalogue SNR —
-   the emptiest real cubes available, with no noise model to get wrong.
-6. **A threshold sweep with the cost axis** — retention against shortlist size
-   — which is the operating point this experiment set out to produce and still
-   has not.
+Done since the first version: Gamma-fluctuating injection (§4b), the
+injected-vs-real discriminator (§4b — confounded, reported as such), the
+operating-point sweep (§4c), `bluse-inject`, provenance in
+`scores/injections_report.json`.
+
+1. **A discriminator that holds the substrate fixed** — the only way to bound
+   the bright arm's validity, since the brightness-matched version cannot
+   (§4b).
+2. **Bandwidth in the grid**, including an unresolved carrier. It drives
+   `f12_bandwidth_hz` and `f11_spectrum_std` directly and is the only harness
+   parameter never swept. Now also the parameter that makes the SNR conversion
+   profile-dependent (§7).
+3. **Crop-retained Σg² per setting.** The amplitude is set on the full window
+   but features are computed after cropping to 60 channels; at UHF, 0.3 Hz/s
+   puts the track ±25.5 channels against a half-width of 30, so the realised
+   in-window SNR is below the stated value and the drift arm is biased per band.
+4. **A drift-matched column**, normalising on integrated-spectrum prominence
+   instead of matched-filter SNR. Seven of the twelve features come from the
+   integrated spectrum, where a drifting signal is several times less prominent
+   at fixed matched-filter SNR — so "drift is doing the work" may partly be a
+   statement about the normalisation.
+5. **Cluster-bootstrap CIs over `obsid`.** 2,160 substrates over ~280
+   observations are not independent; plain binomial intervals are optimistic.
+6. **Real empty substrates**, selected on `x01_drift_residual` near its
+   pure-noise value (≈ 60/√12 = 17.3 channels) rather than on catalogue SNR.

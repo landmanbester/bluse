@@ -53,6 +53,9 @@ DEFAULT_BANDWIDTH_HZ = 3.0
 # ones the model trained on -- a systematic offset that would show up as an
 # injection effect. 60 is the global minimum numChannels across all seven
 # files, so every hit gets an identical window.
+#
+# Imported from the CLI's own default rather than restated, so the two cannot
+# drift apart; test_extraction_crop_matches_the_pipeline pins it either way.
 EXTRACTION_CROP = 60
 
 # Robust noise scale: 1.4826 * MAD recovers the Gaussian sigma. The stamps are
@@ -151,8 +154,28 @@ def dedoppler_snr(profile, amplitude, sigma):
     return float(amplitude) * float(peak.sum()) / (float(sigma) * np.sqrt(T))
 
 
+def effective_dof(img):
+    """
+    Degrees of freedom per sample, from each stamp's own mean^2 / variance.
+
+    Integrated power with k accumulations is Gamma-distributed with relative
+    scatter 1/sqrt(k), so k = mean^2/var recovers it. Measured on real
+    sband_short stamps the median is 13.7 -- but note this is estimated on
+    stamps that CONTAIN a detection, so the signal inflates the variance and
+    biases k low. It is the conservative direction: a lower k means a noisier
+    injection.
+    """
+    img = np.asarray(img, dtype=np.float64)
+    out = np.empty(len(img))
+    for i, a in enumerate(img):
+        v = a[np.isfinite(a) & (a != F.PAD_VALUE)]
+        var = v.var() if v.size else np.nan
+        out[i] = (v.mean() ** 2 / var) if v.size and var > 0 else np.nan
+    return out
+
+
 def inject(cube, meta, *, snr, drift_hz_s, bandwidth_hz=DEFAULT_BANDWIDTH_HZ,
-           centre_channel=None):
+           centre_channel=None, fluctuate=False, seed=0):
     """
     Add a synthetic drifting carrier to each stamp of a raw `data` slice.
 
@@ -164,6 +187,22 @@ def inject(cube, meta, *, snr, drift_hz_s, bandwidth_hz=DEFAULT_BANDWIDTH_HZ,
     Padding is preserved exactly. Stamps are right-aligned in a W-channel
     buffer with a leading run of PAD_VALUE, and injecting into the pad would
     make the signal partly indistinguishable from the window edge.
+
+    `fluctuate=True` multiplies the added power by an independent Gamma(k, 1/k)
+    draw per sample, with k from each stamp's own mean^2/variance. WITHOUT it
+    the injection is a noiseless, unmodulated ridge -- a morphology no real
+    detection has, because real integrated power adds a cross-term whose
+    variance grows with signal power. The difference is measurable and it runs
+    the wrong way: a constant-in-time ridge raises the mean without raising the
+    standard deviation, so median f10_timeseries_std FALLS with injected
+    brightness, and x01_drift_residual collapses to a value set purely by argmax
+    quantisation. Flagged by review on PR #3.
+
+    The Gamma multiply gives the added component variance S^2/k. The exact
+    cross-term would be (S^2 + 2SN)/k, so this UNDER-represents the fluctuation
+    by the 2SN part -- it is a lower bound on how noisy a real detection of the
+    same brightness would be, which is the conservative direction for testing
+    whether the high-SNR reversal is an artefact of smoothness.
     """
     arr = np.asarray(cube)
     squeeze = arr.ndim == 4
@@ -174,16 +213,28 @@ def inject(cube, meta, *, snr, drift_hz_s, bandwidth_hz=DEFAULT_BANDWIDTH_HZ,
     dt_s = float(np.asarray(meta["tsamp"])[0])
     B, T, W = work.shape
     sigma = noise_sigma(work)
+    dof = effective_dof(work) if fluctuate else None
+    rng = np.random.default_rng(seed)
 
+    # The profile depends only on (T, n, df, dt, drift, bandwidth) and n takes
+    # few distinct values, so build one per width rather than one per stamp.
+    cache = {}
     for i in range(B):
         n = min(int(nchan[i]), W)
         lo = W - n                                    # the pad leads
         if not np.isfinite(sigma[i]) or sigma[i] <= 0:
             continue
-        g = signal_profile(T, n, df_hz=df_hz, dt_s=dt_s, drift_hz_s=drift_hz_s,
-                           bandwidth_hz=bandwidth_hz,
-                           centre_channel=centre_channel)
-        work[i, :, lo:] = work[i, :, lo:] + amplitude_for_snr(g, sigma[i], snr) * g
+        if n not in cache:
+            cache[n] = signal_profile(T, n, df_hz=df_hz, dt_s=dt_s,
+                                      drift_hz_s=drift_hz_s,
+                                      bandwidth_hz=bandwidth_hz,
+                                      centre_channel=centre_channel)
+        g = cache[n]
+        added = amplitude_for_snr(g, sigma[i], snr) * g
+        if fluctuate and np.isfinite(dof[i]) and dof[i] > 0:
+            k = float(dof[i])
+            added = added * rng.gamma(shape=k, scale=1.0 / k, size=added.shape)
+        work[i, :, lo:] = work[i, :, lo:] + added
 
     return work[:, None] if squeeze else work
 
@@ -330,7 +381,7 @@ def run(files, *, workspace_dirs, feature_table, n_per_class=150,
         classes=("single", "mid", "multibeam"),
         snr_grid=(5, 8, 12, 20, 35, 60, 100), drift_grid=(0.0, 0.1, 0.3),
         max_snr=8.0, bandwidth_hz=DEFAULT_BANDWIDTH_HZ, crop=EXTRACTION_CROP,
-        seed=0, n_splits=5, n_seeds=3, verbose=True):
+        fluctuate=False, seed=0, n_splits=5, n_seeds=3, verbose=True):
     """
     Inject, extract, score. One row per (substrate, snr, drift), controls
     included at snr=0.
@@ -417,7 +468,8 @@ def run(files, *, workspace_dirs, feature_table, n_per_class=150,
                 # returns 0 at snr=0 -- so no asymmetry of code path can enter
                 # the one comparison the whole experiment rests on.
                 c = inject(cube, sub, snr=snr, drift_hz_s=drift,
-                           bandwidth_hz=bandwidth_hz)
+                           bandwidth_hz=bandwidth_hz, fluctuate=fluctuate,
+                           seed=seed)
                 feats = stamp_features(c, sub, crop_channels=crop)
                 block = pd.DataFrame({k: np.asarray(v, dtype=np.float64)
                                       for k, v in feats.items()})
@@ -433,7 +485,8 @@ def run(files, *, workspace_dirs, feature_table, n_per_class=150,
                 meta_rows.append(pd.DataFrame({
                     "file": name, "row": idx, "id": sub["id"].to_numpy(),
                     "obsid": sub["obsid"].to_numpy(),
-                    "substrate_class": cls,
+                    "substrate_class": cls, "fluctuate": bool(fluctuate),
+                    "bandwidth_hz": float(bandwidth_hz),
                     "substrate_snr": sub["snr"].to_numpy(),
                     "n_beams": sub["n_beams"].to_numpy(),
                     "noise_sigma": sigma, "injected_ok": ok,
@@ -475,3 +528,249 @@ def run(files, *, workspace_dirs, feature_table, n_per_class=150,
             out.loc[keep, "obsid"].to_numpy())
         out.loc[keep, "stored_score"] = sc
     return out
+
+
+def injected_vs_real_auc(injected_norm, injected_ded, feature_table, columns,
+                         *, snr_tol=0.35, n_real=4000, seed=0, min_n=200):
+    """
+    Can a classifier tell our injections apart from real hits of the same
+    brightness? The validity ceiling on everything else in this experiment.
+
+    "No injected feature falls outside the trained range" is necessary and not
+    sufficient, and possibly circular. Marginal ranges say nothing about the
+    JOINT support, and `HistGradientBoosting` bins to 256 levels, so a value at
+    the top edge and a value far beyond it produce identical predictions. This
+    measures the thing that check cannot.
+
+    Real hits are matched on catalogue `snr` to within `snr_tol` in log space of
+    the injection's achieved dedoppler SNR, so the comparison is at like
+    brightness rather than like nominal setting.
+
+    Reading it:
+      ~0.5-0.6  the injections are on-manifold; the score's verdict on them is
+                a statement about the score.
+      ~0.95+    the model is extrapolating and its verdict means nothing there.
+
+    RUN THE TWO CONTROLS BEFORE READING THE NUMBER. Measured on sband_short:
+
+      real hits vs OTHER real hits at matched brightness .... 0.479-0.499
+      real FAINT hits (snr 6-8) vs real hits at snr ~32 ..... 1.000
+      our injections vs real hits at matched brightness ..... 0.997-1.000
+
+    The first validates the method -- it returns chance when there is nothing to
+    separate. The second is the confound, and it is fatal to the naive reading:
+    **a faint real stamp is already perfectly separable from a bright real
+    stamp on these 12 features, with no injection involved.** Since every
+    injection here sits on a faint substrate, "injected is separable from real
+    bright" is what a faint substrate does on its own, and this test cannot
+    attribute it to the signal model.
+
+    So the validity ceiling is UNRESOLVED, not established. A version that could
+    settle it has to hold the substrate fixed -- e.g. two signal models on the
+    same substrates, or injections on substrates drawn from the target
+    brightness class rather than the floor.
+    """
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import train_test_split
+
+    rng = np.random.default_rng(seed)
+    ded = float(np.nanmedian(injected_ded))
+    if not np.isfinite(ded) or ded <= 0:
+        return {"auc": float("nan"), "n_real": 0, "n_injected": 0}
+
+    snr = feature_table["snr"].to_numpy()
+    near = np.flatnonzero(np.abs(np.log(np.maximum(snr, 1e-9)) - np.log(ded))
+                          < snr_tol)
+    if len(near) < min_n:
+        return {"auc": float("nan"), "n_real": int(len(near)),
+                "n_injected": int(len(injected_norm)), "dedoppler": ded}
+    if len(near) > n_real:
+        near = rng.choice(near, n_real, replace=False)
+
+    real = feature_table.iloc[near][columns].to_numpy(np.float64)
+    fake = np.asarray(injected_norm[columns], dtype=np.float64)
+    X = np.vstack([real, fake])
+    y = np.r_[np.zeros(len(real)), np.ones(len(fake))]
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.4, stratify=y,
+                                          random_state=seed)
+    m = HistGradientBoostingClassifier(max_iter=200, early_stopping=False,
+                                       random_state=seed).fit(Xtr, ytr)
+    return {"auc": float(roc_auc_score(yte, m.predict_proba(Xte)[:, 1])),
+            "n_real": int(len(real)), "n_injected": int(len(fake)),
+            "dedoppler": ded}
+
+
+def threshold_sweep(scored, real_scores, *, thresholds=None, keep_below=True):
+    """
+    Retention against its price: the operating point this experiment exists to
+    produce, and the one thing the first version left out.
+
+    A retention curve alone cannot choose a threshold. Keeping 58% of injected
+    signals is worth knowing only beside how many real survivors the same cut
+    admits -- a threshold that keeps everything keeps every false positive too.
+    Both columns, or no recommendation.
+
+    `scored` is the injected population (one row per stamp, column `rfi_score`);
+    `real_scores` is the shipped score over the Track A survivors. Returns one
+    row per threshold with the retained fraction, the shortlist size it implies,
+    and the ratio between them.
+    """
+    import pandas as pd
+
+    if thresholds is None:
+        thresholds = [0.02, 0.05, 0.10, 0.20, 0.30, 0.50, 0.70, 0.90]
+    inj = np.asarray(scored["rfi_score"], dtype=np.float64)
+    real = np.asarray(real_scores, dtype=np.float64)
+    rows = []
+    for t in thresholds:
+        r_inj = float((inj < t).mean()) if keep_below else float((inj > t).mean())
+        n_real = int((real < t).sum()) if keep_below else int((real > t).sum())
+        rows.append({"threshold": float(t), "retained": r_inj,
+                     "n_shortlist": n_real,
+                     "shortlist_frac": n_real / max(len(real), 1),
+                     "retained_per_admitted":
+                         r_inj / max(n_real / max(len(real), 1), 1e-9)})
+    return pd.DataFrame(rows)
+
+
+def main():
+    """`bluse-inject` -- run the experiment and write the artefact."""
+    import argparse
+    import json
+    import os
+    import time
+
+    import pandas as pd
+
+    from . import paths
+    from . import track_e_score as E
+
+    p = argparse.ArgumentParser(
+        prog="bluse-inject", description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    paths.add_workspace_arg(p)
+    p.add_argument("files", nargs="*", metavar="NAME",
+                   help="file stems to inject into (default: every file with "
+                        "both a catalogue and an HDF5, except the pre-filtered "
+                        "mk_sample_hits, whose beam counts are artefacts)")
+    p.add_argument("--n-per-class", type=int, default=120, metavar="N",
+                   help="substrates per beam class per file (default 120). "
+                        "Sampled PER CLASS because the score responds in "
+                        "opposite directions on single-beam and multi-beam "
+                        "substrates, so a pooled number is a composition "
+                        "effect -- the defect that broke the first run")
+    p.add_argument("--classes", nargs="+", default=list(SUBSTRATE_CLASSES),
+                   choices=list(SUBSTRATE_CLASSES),
+                   help="which beam classes to inject into (default all three)")
+    p.add_argument("--snr", nargs="+", type=float,
+                   default=[5, 8, 12, 20, 35, 60, 100], metavar="S",
+                   help="matched-filter SNR grid. NOT seticore's SNR -- the "
+                        "artefact records the dedoppler equivalent per stamp, "
+                        "which is roughly half these values")
+    p.add_argument("--drift", nargs="+", type=float, default=[0.0, 0.1, 0.3],
+                   metavar="D", help="drift rates in Hz/s (default 0, 0.1, 0.3)")
+    p.add_argument("--bandwidth", type=float, default=DEFAULT_BANDWIDTH_HZ,
+                   metavar="HZ",
+                   help=f"Gaussian sigma of the injected carrier in Hz "
+                        f"(default {DEFAULT_BANDWIDTH_HZ}). Drives f12 and f11 "
+                        f"directly, so it matters more than it looks")
+    p.add_argument("--fluctuate", action="store_true",
+                   help="multiply the added power by a Gamma(k, 1/k) draw with "
+                        "k from each stamp's own mean^2/variance. Without it "
+                        "the injection is a noiseless ridge whose temporal "
+                        "statistics no real detection has")
+    p.add_argument("--max-snr", type=float, default=8.0, metavar="S",
+                   help="substrate catalogue SNR ceiling (default 8)")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--folds", type=int, default=5)
+    p.add_argument("--seeds", type=int, default=3, metavar="N",
+                   help="seeds averaged in the scoring ensemble (default 3)")
+    p.add_argument("--tag", default="", metavar="STR",
+                   help="prefix for the output filenames")
+    p.add_argument("--no-plots", action="store_true")
+    args = p.parse_args()
+    paths.set_workspace(args.workspace)
+    print(paths.banner())
+
+    t0 = time.time()
+    src = os.path.join(paths.features_dir(), "all_features.parquet")
+    if not os.path.exists(src):
+        raise SystemExit(paths.missing_workspace_message("all_features.parquet",
+                                                         src))
+    raw = [c[:-2] for c in E.FEATURE_SETS["stamp"]]
+    ft = pd.read_parquet(src, columns=sorted(set(
+        raw + E.FEATURE_SETS["stamp"] +
+        ["weak_label", "group_id", "file", "id", "snr"])))
+
+    files = args.files
+    if not files:
+        files = sorted(f for f in ft["file"].unique()
+                       if f not in E.PREFILTERED_FILES)
+    print(f"injecting into: {', '.join(files)}")
+
+    out = run(files, workspace_dirs={"catalogues": paths.catalogues_dir(),
+                                     "data": paths.data_dir()},
+              feature_table=ft, n_per_class=args.n_per_class,
+              classes=tuple(args.classes), snr_grid=tuple(args.snr),
+              drift_grid=tuple(args.drift), max_snr=args.max_snr,
+              bandwidth_hz=args.bandwidth, fluctuate=args.fluctuate,
+              seed=args.seed, n_splits=args.folds, n_seeds=args.seeds)
+
+    d = paths.scores_dir()
+    tag = f"{args.tag}_" if args.tag else ""
+    ap = os.path.join(d, f"{tag}injections.parquet")
+    out.to_parquet(ap)
+    print(f"\nwrote {ap}  ({len(out):,} rows)")
+
+    # Provenance: the run used n_per_class=150 against a default of 200 once,
+    # and that was recoverable only by counting rows.
+    info = {"files": list(files), "n_per_class": args.n_per_class,
+            "classes": list(args.classes), "snr_grid": list(args.snr),
+            "drift_grid": list(args.drift), "bandwidth_hz": args.bandwidth,
+            "fluctuate": bool(args.fluctuate), "max_snr": args.max_snr,
+            "crop": EXTRACTION_CROP, "seed": args.seed, "n_splits": args.folds,
+            "n_seeds": args.seeds, "n_rows": int(len(out)),
+            "n_substrates": int(out.query("kind == 'control'").shape[0]),
+            "max_frac_out_of_range": float(out.frac_out_of_range.max()),
+            "n_fold_fallback": int(out.fold_was_fallback.sum()),
+            "n_not_injected": int((~out.injected_ok).sum()),
+            "elapsed_s": round(time.time() - t0, 1)}
+
+    ctl = out[out.kind == "control"]
+    inj = out[out.kind == "injected"]
+    info["by_class"] = {
+        c: {"n": int((ctl.substrate_class == c).sum()),
+            "control_keep": float((ctl[ctl.substrate_class == c].rfi_score
+                                   < 0.1).mean()),
+            "control_prune": float((ctl[ctl.substrate_class == c].rfi_score
+                                    > 0.9).mean())}
+        for c in args.classes}
+    print("\n  control by substrate class (keep <0.1 / prune >0.9):")
+    for c, v in info["by_class"].items():
+        print(f"    {c:10s} n={v['n']:>5,}  keep {v['control_keep']:.3f}  "
+              f"prune {v['control_prune']:.3f}")
+
+    rp = os.path.join(d, f"{tag}injections_report.json")
+    with open(rp, "w") as fh:
+        json.dump(info, fh, indent=2)
+    print(f"\nwrote {rp}")
+
+    if not args.no_plots and "single" in args.classes:
+        from . import track_e_plots as P
+        s = out[out.substrate_class == "single"]
+        c, i = s[s.kind == "control"], s[s.kind == "injected"]
+        agg = i.groupby(["injected_snr", "drift_hz_s"]).agg(
+            retained=("rfi_score", lambda x: (x < 0.10).mean()),
+            pruned=("rfi_score", lambda x: (x > 0.90).mean()),
+            dedoppler=("dedoppler_snr", "mean")).reset_index()
+        fp = os.path.join(paths.plots_dir(), f"{tag}track_e_injection_retention.png")
+        P.fig_injection_retention(
+            agg, {"retained": float((c.rfi_score < 0.10).mean()),
+                  "pruned": float((c.rfi_score > 0.90).mean())}, fp)
+        print(f"wrote {fp}")
+    print(f"\ntotal {time.time() - t0:.0f}s")
+
+
+if __name__ == "__main__":
+    main()

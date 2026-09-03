@@ -224,3 +224,111 @@ def test_zero_snr_injection_is_a_no_op():
     """
     c, m = _cube(), _meta()
     assert np.array_equal(I.inject(c, m, snr=0.0, drift_hz_s=0.2), c)
+
+
+def test_extraction_crop_matches_the_pipeline():
+    """
+    Two independent literals with a comment saying they must agree is not a
+    guarantee. If bluse-features changes its crop, every stamp feature computed
+    here goes through a different window than the model was trained on, and the
+    offset would present as an injection effect.
+    """
+    import argparse
+
+    from bluse import track_b_features as B
+
+    p = argparse.ArgumentParser()
+    B.build_parser(p) if hasattr(B, "build_parser") else None
+    src = open(B.__file__).read()
+    marker = '"--crop", type=int, default='
+    assert marker in src, "the CLI's crop default moved; update this test"
+    default = int(src.split(marker)[1].split(",")[0])
+    assert I.EXTRACTION_CROP == default, (I.EXTRACTION_CROP, default)
+
+
+def test_fluctuating_injection_stops_the_ridge_being_unnaturally_smooth():
+    """
+    The defect review found: a constant-in-time ridge raises the mean without
+    raising the standard deviation, so f10_timeseries_std FALLS with injected
+    brightness -- the stamp becomes smoother than pure noise, which no real
+    detection does.
+
+    Measured on real sband_short substrates: smooth 0.0347 -> 0.0288 across the
+    grid, Gamma-fluctuating 0.0347 -> 0.0348. Pinned here on synthetic cubes so
+    it runs anywhere.
+    """
+    c, m = _cube(n=60, seed=3), _meta(n=60)
+    smooth = I.inject(c, m, snr=150, drift_hz_s=0.0, fluctuate=False)
+    rough = I.inject(c, m, snr=150, drift_hz_s=0.0, fluctuate=True, seed=1)
+
+    def f10(cube):
+        return np.nanmedian(I.stamp_features(cube, m, crop_channels=60)
+                            ["f10_timeseries_std"])
+
+    base = f10(c)
+    assert f10(smooth) < base, "the smooth ridge should flatten the timeseries"
+    assert f10(rough) > f10(smooth), "fluctuation should restore the scatter"
+
+
+def test_fluctuation_is_reproducible_and_preserves_the_pad():
+    c, m = _cube(), _meta()
+    a = I.inject(c, m, snr=50, drift_hz_s=0.1, fluctuate=True, seed=7)
+    b = I.inject(c, m, snr=50, drift_hz_s=0.1, fluctuate=True, seed=7)
+    assert np.array_equal(a, b)
+    assert (a[:, :, :120 - 80] == F.PAD_VALUE).all()
+
+
+def test_effective_dof_recovers_a_known_gamma_shape():
+    rng = np.random.default_rng(0)
+    for k in (5.0, 30.0):
+        a = rng.gamma(shape=k, scale=1.0 / k, size=(4, 40, 120))
+        got = np.median(I.effective_dof(a))
+        assert abs(got - k) / k < 0.15, (k, got)
+
+
+def test_threshold_sweep_reports_the_price_of_retention():
+    """
+    A retention curve alone cannot choose a threshold -- keeping everything
+    keeps every false positive too. The first version of this experiment
+    reported only the keep side, which is how "at 0.5 the best case is 65%"
+    got published as if it were a trade-off.
+    """
+    import pandas as pd
+
+    inj = pd.DataFrame({"rfi_score": np.linspace(0, 1, 1000)})
+    real = np.linspace(0, 1, 500)
+    sw = I.threshold_sweep(inj, real, thresholds=[0.1, 0.5, 0.9])
+    assert list(sw.columns) == ["threshold", "retained", "n_shortlist",
+                                "shortlist_frac", "retained_per_admitted"]
+    assert sw.retained.is_monotonic_increasing
+    assert sw.n_shortlist.is_monotonic_increasing, "cost must rise with recall"
+    assert np.isclose(sw.retained.iloc[0], 0.1, atol=0.01)
+
+
+@pytest.mark.parametrize("cls", ["single", "multibeam"])
+def test_committed_artefact_still_says_what_the_writeup_says(cls):
+    """
+    docs/injections-2026-09.md quotes these. The artefact is COMMITTED, so
+    unlike the Track E numbers this can be pinned without a workspace -- if one
+    of them moves, the document changed.
+    """
+    import os
+
+    import pandas as pd
+
+    path = os.path.join(os.path.dirname(__file__), "..", "..",
+                        "aug_2026_workshop", "scores", "injections.parquet")
+    if not os.path.exists(path):
+        pytest.skip("injections.parquet not in this checkout")
+    df = pd.read_parquet(path)
+    d = df[df.substrate_class == cls]
+    ctl = d[d.kind == "control"]
+    inj = d[d.kind == "injected"]
+    expect = {"single": (0.428, 0.335), "multibeam": (0.001, 0.930)}[cls]
+    assert abs((ctl.rfi_score < 0.1).mean() - expect[0]) < 0.01
+    if cls == "single":
+        bright = inj[(inj.injected_snr == 100) & (inj.drift_hz_s == 0.0)]
+        assert (bright.rfi_score > 0.9).mean() > 0.85, "the 91% prune rate"
+        best = inj.groupby(["injected_snr", "drift_hz_s"]).rfi_score.apply(
+            lambda x: (x < 0.1).mean()).max()
+        assert 0.55 < best < 0.62, best
