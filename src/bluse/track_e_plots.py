@@ -342,3 +342,64 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# --- injections -------------------------------------------------------------
+
+def fig_injection_retention(inj, control_rate, path, threshold=0.10):
+    """
+    What fraction of INJECTED real signals a cut at `threshold` would keep,
+    against how bright they were injected.
+
+    Three drift rates as three series, because drift turns out to be the
+    dominant variable -- a zero-drift injection is scored as RFI whatever its
+    brightness. The control rate is drawn as the floor: it is what the same
+    substrates score with nothing added, so any line below it means the
+    injection made things WORSE.
+
+    The story is the shape, not a single number, which is why this is a line
+    chart and not a stat tile: retention rises gently to a peak near SNR 35 and
+    then falls off a cliff, because a very bright narrowband carrier is
+    morphologically what bright RFI looks like.
+    """
+    plt = _rc()
+    fig, ax = plt.subplots(figsize=(7.6, 4.4))
+    _clean(ax)
+
+    ax.axhline(control_rate, color=GREY, linewidth=1.6, zorder=1)
+    ax.annotate(f"no injection at all — {control_rate:.0%}",
+                (inj["injected_snr"].min(), control_rate),
+                textcoords="offset points", xytext=(2, -16), ha="left",
+                fontsize=9.5, color=MUTED)
+
+    for (drift, part), col in zip(sorted(inj.groupby("drift_hz_s")),
+                                  (AQUA, ORANGE, BLUE)):
+        g = part.sort_values("injected_snr")
+        ax.plot(g["injected_snr"], g["retained"], "-o", color=col, linewidth=2,
+                ms=8, mec=SURFACE, mew=2, zorder=3)
+        # Direct-labelled: aqua sits below 3:1 on this surface, so the relief
+        # rule applies and every series carries its own label.
+        last = g.iloc[-1]
+        ax.annotate(f"{drift:g} Hz/s", (last["injected_snr"], last["retained"]),
+                    textcoords="offset points", xytext=(11, 0), va="center",
+                    fontsize=10, color=INK, fontweight="bold")
+
+    peak = inj.loc[inj["retained"].idxmax()]
+    ax.annotate(f"best {peak['retained']:.0%} at SNR {peak['injected_snr']:g}",
+                (peak["injected_snr"], peak["retained"]),
+                textcoords="offset points", xytext=(0, 13), ha="center",
+                fontsize=9.5, color=INK)
+
+    ax.set_xscale("log")
+    ax.set_xticks(sorted(inj["injected_snr"].unique()))
+    ax.set_xticklabels([f"{v:g}" for v in sorted(inj["injected_snr"].unique())])
+    ax.set_xlim(inj["injected_snr"].min() * 0.85,
+                inj["injected_snr"].max() * 1.55)
+    ax.set_ylim(0, max(0.55, inj["retained"].max() * 1.25))
+    ax.set_xlabel("injected signal strength (matched-filter SNR)")
+    ax.set_ylabel(f"fraction kept by a cut at {threshold:g}")
+    ax.set_title("A real signal has to drift, and must not be too bright")
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path

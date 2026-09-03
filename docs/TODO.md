@@ -339,11 +339,28 @@ no improvement).
   survivor list. `bluse-score`.
 
   **New questions it raised, in priority order:**
-  1. **Synthetic injections are now the binding constraint.** Every Track E
-     number measures agreement with the spatial filter, not with truth. An
-     injection harness would give a real objective function and settle whether
-     the monotonicity is physics or an SNR gradient. This was already P2 §6;
-     it is now the highest-value item in the repository.
+  1. ~~**Synthetic injections are now the binding constraint.**~~ — **FIRST
+     RESULT 2026-09-03**, branch `feature/synthetic-injections`, written up in
+     [`injections-2026-09.md`](injections-2026-09.md). It answered both
+     falsification risks, and not in Track E's favour:
+     - a cut at the shipped `shortlist_below=0.1` keeps **at most 43%** of
+       injected real signals (control 11%), so 0.1 is not a defensible
+       operating point for anyone who cares about not discarding signals;
+     - retention **peaks near SNR 35 and collapses to 0.006** at SNR 100 with
+       no drift, where the paired shift turns *positive* — a bright carrier is
+       scored as more RFI-like than the noise it replaced. Not extrapolation:
+       no injected feature falls outside the trained range. The mechanism is
+       that a bright narrowband carrier converges on the file's typical
+       morphology, and the typical hit is RFI.
+     - **Pruning is unaffected**; the shortlist is weaker than it looked.
+
+     Still open on this: a **clean-substrate run**. Every injection here sits on
+     a real hit (controls score 0.82, so mostly RFI), which makes these numbers
+     a lower bound. Synthetic cubes with matched noise are the comparison, and
+     the difference between the two would measure how much the substrate
+     matters. Also open: a wider drift grid (the curve is still rising at
+     0.3 Hz/s) and injecting the same signal across a beam set, which would
+     test the filter and the score against each other directly.
   2. **Did seed-averaging remove noise, or remove marginal detections?** The
      `contrarian` set halved, 3,303 → 1,515, when the score went to a
      three-seed mean. I wrote that up as removing churn. It is consistent with
@@ -385,6 +402,17 @@ no improvement).
   rows 1,605,678 → **2,014,055 (+25.4%)**, now exactly matching the team's
   `filtered_hits.csv`. See `aug_2026_workshop/README.md` and AGENTS.md gotcha 7.
 - **Per-antenna voltages** would enable imaging follow-up. Ask.
+- **The `_n` columns are normalised PER FILE, and nothing said so.**
+  `bluse-features` calls `normalise()` inside `extract()`, once per file, and
+  `summarise()` concatenates without re-normalising — so a `_n` value is a rank
+  within its own file, not within the survey. Measured:
+  `x01_drift_residual = 0.2790005` is 0.1523 in `lband_long` and 0.0253 in
+  `mk_sample_hits`. Found 2026-09-03 while chasing a measurement floor in the
+  injection harness. It is defensible — self-normalising each file arguably
+  helps cross-band transfer, and Track E's held-out-band numbers are consistent
+  with that — but **it is not what "normalised feature" implies**, and anything
+  comparing `_n` values across files is comparing ranks in different
+  distributions. Decide whether to keep it, and document it either way.
 - **`mk_sample_hits` is unusable for anything beam-derived.** Measured
   2026-09-03: 8,116 of its hits also appear in `lband_long` under the same
   `id`, frequency and beam, counted in a mean of **1.87 beams** there against
