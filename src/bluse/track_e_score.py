@@ -242,6 +242,71 @@ def fit_score(df, *, features="stamp", n_splits=5, seed=0, n_seeds=3,
     }
     return score, fold, info
 
+
+
+def fold_models(df, *, features="stamp", n_splits=5, seed=0, n_seeds=3,
+                exclude_mk=True, max_iter=300):
+    """
+    The fitted ensemble plus the map from observation to fold, so NEW data can
+    be scored by a model that never saw its observation.
+
+    `fit_score` scores the rows it trains on and throws the models away, which
+    is right for a one-pass pipeline and useless for injections: an injected
+    stamp is built ON TOP of a real hit, and that hit is in the training set.
+    Scoring it with a model that trained on its own substrate would leak the
+    substrate's morphology into the answer -- exactly the mistake the group
+    split exists to prevent, arriving through a side door.
+
+    Returns (models, fold_of_group):
+      models[k]         list of n_seeds fitted models for fold k
+      fold_of_group[g]  the fold that HELD OUT observation g
+
+    Score a new stamp derived from a hit in observation g with
+    `models[fold_of_group[g]]`, averaged. `predict_held_out` does that.
+    """
+    cols = feature_columns(features)
+    X = df[cols].to_numpy(FEATURE_DTYPE)
+    y = df["weak_label"].to_numpy().astype(np.int8)
+    groups = df["group_id"].to_numpy()
+
+    train = y >= 0
+    if exclude_mk and "file" in df.columns:
+        train &= ~df["file"].isin(PREFILTERED_FILES).to_numpy()
+    tr_idx = np.flatnonzero(train)
+
+    models, fold_of_group = {}, {}
+    splits = GroupKFold(n_splits).split(tr_idx, y[tr_idx], groups[tr_idx])
+    for k, (tr, te) in enumerate(splits):
+        models[k] = [
+            HistGradientBoostingClassifier(
+                max_iter=max_iter, early_stopping=False, random_state=sd
+            ).fit(X[tr_idx[tr]], y[tr_idx[tr]])
+            for sd in range(seed, seed + n_seeds)]
+        for g in np.unique(groups[tr_idx[te]]):
+            fold_of_group[g] = k
+    return models, fold_of_group
+
+
+def predict_held_out(models, fold_of_group, X, groups, *, default_fold=0):
+    """
+    Score rows with the fold ensemble that held their observation out.
+
+    An observation absent from `fold_of_group` -- possible if it contributed no
+    labelled rows -- falls back to `default_fold` and is counted in the return,
+    because silently scoring it with a model that may have seen it is the kind
+    of thing that turns into a retracted number.
+    """
+    X = np.asarray(X, dtype=FEATURE_DTYPE)
+    out = np.empty(len(X))
+    n_fallback = 0
+    for i, g in enumerate(np.asarray(groups)):
+        k = fold_of_group.get(g)
+        if k is None:
+            k, n_fallback = default_fold, n_fallback + 1
+        ms = models[k]
+        out[i] = float(np.mean([m.predict_proba(X[i:i + 1])[0, 1] for m in ms]))
+    return out, n_fallback
+
 # ---------------------------------------------------------------------------
 # validation
 # ---------------------------------------------------------------------------
