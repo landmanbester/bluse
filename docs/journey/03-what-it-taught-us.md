@@ -1,6 +1,6 @@
 # What it taught us
 
-Nine things, each anchored to an incident in
+Ten things, each anchored to an incident in
 [`02-wrong-turns.md`](02-wrong-turns.md). None of them are general advice; all
 of them cost us something specific.
 
@@ -81,6 +81,10 @@ Two of them, both invisible:
 
 - an equality assertion that passed while the value was wrong, **because
   `1 == True` in Python** ([#13](02-wrong-turns.md));
+- a test named `test_amplitude_delivers_the_snr_it_was_asked_for` that asserted
+  the **algebraic inverse of the function under test**, so it could only fail if
+  someone edited both together — while the formula it guarded was wrong by
+  1/√2 ([#18](02-wrong-turns.md));
 - a test that pinned global state and turned **twelve real-data tests into
   silent skips** — which reads as "no data on this machine", not as a failure.
   A commit shipped with them not running ([#14](02-wrong-turns.md)).
@@ -127,12 +131,24 @@ pipeline rather than a competition with it.
 
 ## 8. Confidence is not calibration
 
-In the last two hours, the two claims that would have been defended most
-strongly both failed on contact with a check:
+Five times now, a claim in the highest-confidence class has failed on contact
+with a check:
 
 - the headline attribution (**wrong by 9×**);
 - the survey-scale extrapolation (**not supported — 107× non-uniformity in the
-  quantity it assumed was uniform**).
+  quantity it assumed was uniform**);
+- the attribution table in a document *about* overclaiming (**invented**);
+- the injection SNR axis (**wrong by 1/√2**, and the guarding test could not
+  fail);
+- **"pruning is unaffected" — which I had listed under *safe as stated*** in a
+  summary whose whole purpose was to separate the safe claims from the unsafe
+  ones. It had never been measured. Measured, it is 91% wrong
+  ([#20](02-wrong-turns.md)).
+
+The last one is the instructive failure. Sorting claims into *safe* and *not
+safe* is exactly the right instinct, and doing it by introspection rather than
+by checking which ones had been measured put the single most damaging claim on
+the wrong side of the line.
 
 Both had already been pushed. Neither was flagged as uncertain. Both were
 produced by exactly the same process as the claims that turned out to be
@@ -148,7 +164,22 @@ beats the paragraph you are currently reading.
 
 ---
 
-## 9. The backlog item won
+## 9. A control that returns the expected floor does not make a test unconfounded
+
+Review proposed a good validity check and it returned a clean-looking **AUC
+0.997–1.000**. The obvious control — real hits against other real hits at
+matched brightness — returned **0.479–0.499**, exactly the floor. Method
+validated, result apparently solid.
+
+The second control killed it. Real *faint* hits against real *bright* hits
+return **1.000**, with no injection at all — and every injection in the
+experiment sits on a faint substrate. So the test could not attribute anything
+to the thing it was built to test ([#23](02-wrong-turns.md)).
+
+One control tells you the instrument works. It takes a different control to
+tell you the comparison is clean.
+
+## 10. The backlog item won
 
 Track E was listed at P3 — *"still queued"* — for the whole three days, while
 the effort went into the clustering track that produced three rejections and one
@@ -186,11 +217,12 @@ extrapolation stated without a hedge. None of these announce themselves.
 
 The practices that actually caught things, in order of how much they caught:
 
-1. **running the planned experiment and believing the answer** — the largest
-   single category, and three of those four killed an improvement they were
-   expected to confirm;
-2. **adversarial review** — 2 of the 17 entries here, and 13 more comments on
-   PR #1 alone, including defects self-review had explicitly signed off;
+1. **adversarial review** — 6 of the 23 entries, plus 13 more comments on PR #1
+   alone. On day 3, the first time anything was read by someone who had not
+   written it, review found **both** headline errors within hours;
+2. **running the planned experiment and believing the answer** — the largest
+   category across the self-reviewed days, and three of those four killed an
+   improvement they were expected to confirm;
 3. **reconciling numbers that disagree**, however small the discrepancy looks —
    a 848-row difference in a survivor count produced the single most actionable
    finding of the three days;

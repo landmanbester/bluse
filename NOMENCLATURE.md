@@ -153,7 +153,16 @@ filter is blind on single-beam hits**, and a technosignature is a single-beam
 hit. So is a weak local emitter that only clears threshold at boresight. The
 filter cannot separate them; a score that never looks at beams can be asked.
 
-### Three things the score is not
+### Four things the score is not
+
+**It is not reliable at high brightness — this is measured, not a hedge.**
+Synthetic injections put a known real signal into real stamps and score it:
+above catalogue SNR ≈10 (zero drift) to ≈30 (0.3 Hz/s) the score moves the
+*wrong way*, and at catalogue SNR ≈51 with no drift **91% of injected real
+signals are pushed above the 0.9 pruning threshold** — they would be discarded,
+not merely ranked low. Corroborated without injections: the shipped column's
+within-decile AUC falls from 0.996 at catalogue SNR 14–30 to 0.61 at 498–777.
+See [`docs/injections-2026-09.md`](docs/injections-2026-09.md).
 
 **It is not a probability that a hit is RFI.** The labels are
 *positive-unlabelled*: `weak_label == 0` means seen in ≤2 beams, **not verified
@@ -204,7 +213,7 @@ Quoted constantly, so worth pinning down.
 | **median family span** | typical frequency width of a family | full span is max−min, which one outlier dominates. The interquartile range is the honest number: **111.6 MHz vs 9.4 MHz** on the same 40 families |
 | **distance share** | how much one feature contributes to the distance the clusterer sees | the *k-NN* share is the one that matters, not the global one — HDBSCAN responds to local density |
 | **weak label** | provisional RFI / beam-confined tag used for enrichment checks | not ground truth. There is no ground truth in this data yet |
-| **RFI score** | how much one hit looks like multi-beam interference, from stamp morphology alone | positive-unlabelled: high means RFI, low means *unlike this survey's RFI* — never "candidate" |
+| **RFI score** | how much one hit looks like multi-beam interference, from stamp morphology alone | positive-unlabelled: high means RFI, low means *unlike this survey's RFI* — never "candidate". Inverts above catalogue SNR ~10–30 |
 
 ## If you read one paragraph
 
