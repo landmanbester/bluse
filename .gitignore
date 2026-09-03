@@ -34,6 +34,12 @@ aug_2026_workshop/clusters/*_metrics.json
 # ~1.3 MB, and they are what the last day of the workshop produced.
 aug_2026_workshop/scores/all_scores.parquet
 aug_2026_workshop/scores/ambiguous.csv
+# Intermediate injection runs. `bluse-inject --tag X` writes X_injections.parquet
+# for a comparison arm; only the canonical scores/injections.parquet is tracked,
+# and each tracked row carries hit-level identifiers on a PUBLIC repository, so
+# there is no reason to keep supersets of the same data around.
+aug_2026_workshop/scores/*_injections.parquet
+aug_2026_workshop/scores/injections_fluctuating.parquet
 
 # Plots are regenerated on demand by bluse-explore.
 aug_2026_workshop/plots/
