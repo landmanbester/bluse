@@ -331,11 +331,15 @@ itself.
   that writes or reads one — never call `to_parquet`/`read_parquet` on a
   feature matrix directly, because two ways of breaking the convention are
   completely silent:
-    - `set_index("id")` on ids that happen to run 0..N-1 yields a *RangeIndex*,
-      which pandas stores as metadata instead of a column. The ids are then not
-      in the file, and a reader gets 0..N-1 back, which looks identical to
-      having read them. `FIO.write` passes `index=True`, which forces
-      materialisation. No delivery we hold starts at 0; that is luck.
+    - On **pandas 3**, `set_index("id")` yields a *RangeIndex* whenever the ids
+      form an arithmetic sequence (`0,1,2,3,4`, but equally `7,9,11,13,15`),
+      and pandas stores a RangeIndex as `{kind: range, start, stop, step}` in
+      the metadata instead of writing a column. `pd.read_parquet` still
+      reproduces the values, so a pandas-only test cannot see it — but the file
+      has no `id` field, so pyarrow, polars, DuckDB and R/arrow get the
+      features with no ids at all, and `columns=["id", ...]` raises
+      `ArrowInvalid`. pandas 2 writes the column either way. `FIO.write` passes
+      `index=True`, which materialises it whatever the index type.
     - `pd.read_parquet(path, columns=["id", ...])` returns the id as the
       *index*, not a column, so `df["id"]` raises `KeyError` even though you
       named it. `FIO.read` always hands the id back as a column.

@@ -33,24 +33,45 @@ line in each of six modules and nothing in the science.
 Do not call `to_parquet` or `read_parquet` on a feature matrix directly. Two
 ways of breaking the convention are completely silent.
 
-### Trap 1 — a RangeIndex is stored as metadata, not as a column
+### Trap 1 — on pandas 3, `set_index` can stop the ids being written
 
-The workshop's own snippet is
+pandas 3 infers a **RangeIndex** from any index whose values form an arithmetic
+sequence — `0,1,2,3,4`, but equally `7,9,11,13,15` or `104,103,102` — and it
+stores a RangeIndex as `{"kind": "range", start, stop, step}` in the pandas
+metadata instead of writing a column:
 
 ```python
-pd.DataFrame(index=data_file['id'][:], data=features).to_parquet(path)
+df = pd.DataFrame({"id": [7, 9, 11, 13, 15], "x": ...}).set_index("id")
+df.to_parquet(path)
+pq.read_schema(path).names        # ['x']   —  no `id` field
 ```
 
-which is right for every file we hold. But if a dataset's ids happen to run
-0, 1, 2 … N−1, `set_index` gives back a **RangeIndex**, and pandas stores a
-RangeIndex as three numbers in the file metadata rather than as a column. The
-ids are then not in the file at all — and a reader gets 0…N−1 back, which is
-indistinguishable from having read them. `to_parquet(path, index=True)` forces
-materialisation. `FIO.write` passes it, and builds the index with `pd.Index` so
-the dtype survives the round trip as well.
+| | `set_index("id")` returns | `id` column written |
+|---|---|---|
+| pandas 2.2.3 | `Index` | yes |
+| pandas 3.0.5 | `RangeIndex` | **no** |
 
-None of our seven deliveries starts at id 0. That is luck, not protection, and
-it is the reason the note went back into `format.md` for everyone else.
+The values are not lost *to pandas* — start/stop/step reproduce them exactly,
+so a `read_parquet` round trip looks perfect and this never shows up in a
+pandas-only test. What is lost is the id **column**, and with it:
+
+- **every non-pandas reader.** `pq.read_table(path).column_names` is `['x']`;
+  the same for polars, DuckDB, R/arrow, Spark. For a convention that exists so
+  groups can cross-match each other's features, that is the whole failure.
+- `read_parquet(path, columns=["id", ...])`, which raises `ArrowInvalid: No
+  match for FieldRef.Name(id)`.
+- the dtype, which comes back `int64` whatever went in.
+
+`to_parquet(path, index=True)` materialises the column whatever the index type.
+`FIO.write` passes it, and builds the index with `pd.Index` so the dtype
+survives the round trip too. Written up as
+[issue #5](https://github.com/landmanbester/bluse/issues/5).
+
+**`format.md`'s own snippet is not affected.** Constructing with
+`pd.DataFrame(index=data_file['id'][:], data=features)` gives a plain `Index`,
+and the column is written on both pandas 2 and 3. `set_index` is the one to
+avoid — and it is the obvious thing to write when the ids arrive as a column,
+which is how ours do.
 
 ### Trap 2 — `columns=` does not give you back an `id` column
 
@@ -63,9 +84,9 @@ df["id"]                                        # KeyError
 
 The id came back as the *index*. Against a naively-written file — trap 1, ids
 never materialised — the same call instead raises `ArrowInvalid: No match for
-FieldRef.Name(id)`. Two different failures from one mistake. `FIO.read` strips
-`id` from the request, resets the index afterwards, and **always** returns the
-id as a column whether or not the caller asked for it.
+FieldRef.Name(id)`. Two different failures from one mistake. `FIO.read` appends
+`id` to the request, resets the index afterwards, and **always** returns the id
+as a column whether or not the caller asked for it.
 
 ## Why `discover()` does not glob `*_features.parquet`
 
@@ -87,7 +108,9 @@ known method is peeled off the right.
 The convention asks for a short description in the shared document. This is the
 text added to `aug_2026_workshop/features/format.md` under
 **GLOBULAR morphology features**; keep the two in step if the feature set
-changes.
+changes. The `set_index` note above went in alongside it, since any group whose
+ids form an arithmetic sequence — a contiguous slice of a catalogue is the
+obvious way to get one — would ship files with no id column and no error.
 
 > One file per delivery — `lband_long`, `lband_short`, `mk_sample_hits`,
 > `sband_long`, `sband_short`, `uhf_long`, `uhf_short` — plus a combined

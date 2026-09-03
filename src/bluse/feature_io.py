@@ -14,20 +14,34 @@ silent when you do.
 
 THE TWO TRAPS
 -------------
-**1. A RangeIndex is not written.** `format.md` recommends
+**1. On pandas 3, `set_index("id")` can stop the ids being written at all.**
+pandas 3 infers a *RangeIndex* from any index whose values form an arithmetic
+sequence -- 0,1,2,3,4 but equally 7,9,11,13,15 or 104,103,102 -- and it stores a
+RangeIndex as `{"kind": "range", start, stop, step}` in the pandas metadata
+instead of writing a column. The file's schema then has no `id` field:
 
-    pd.DataFrame(index=data_file['id'][:], data=features).to_parquet(...)
+    pandas 2.2.3   set_index -> Index        `id` column written
+    pandas 3.0.5   set_index -> RangeIndex   `id` column NOT written
 
-and that is right for every file we hold. But `set_index` on a column whose
-values happen to be 0, 1, 2, ... N-1 gives back a *RangeIndex*, and pandas
-stores a RangeIndex as three numbers in the metadata rather than as a column.
-The ids then do not exist in the file at all, and the reader silently gets
-0..N-1 -- which looks exactly like a valid id column. `write()` passes
-`index=True`, which forces materialisation, and builds the index with
-`pd.Index` so the dtype survives the round trip as well.
+The values are not lost *to pandas* -- start/stop/step reproduce them exactly,
+so a `pd.read_parquet` round trip looks perfect and this will never show up in
+a pandas-only test. What is lost is the id **column**, and with it:
 
-None of our seven deliveries starts at id 0, so nothing on disk today hit this.
-That is luck, not protection.
+  - every non-pandas reader. `pq.read_table(path).column_names` is `['x']`;
+    the same is true for polars, DuckDB, R/arrow, Spark. For a convention whose
+    entire purpose is cross-matching between groups, that is the failure.
+  - `read_parquet(path, columns=["id", ...])`, which raises `ArrowInvalid: No
+    match for FieldRef.Name(id)`.
+  - the dtype, which comes back int64 whatever went in.
+
+`write()` passes `index=True`, which materialises the column whatever the index
+type, and builds the index with `pd.Index` so the dtype survives too.
+
+`format.md`'s own snippet -- `pd.DataFrame(index=data_file['id'][:],
+data=features)` -- is **not** affected: constructing with `index=` gives a plain
+`Index`, and the column is written on both pandas 2 and 3. `set_index` is the
+one to avoid, and it is the obvious thing to write when the ids arrive as a
+column, which is how ours do.
 
 **2. `columns=` does not give you back an `id` column.** Once `id` is the
 index, `pd.read_parquet(path, columns=["id", "snr"])` succeeds and returns a
@@ -134,10 +148,12 @@ def write(df: pd.DataFrame, dest: str) -> str:
             f"deduplicated on `id` for exactly this reason; a per-file table "
             f"with duplicate ids means the delivery itself repeats a hit.")
 
-    # pd.Index rather than set_index: set_index on a perfect 0..N-1 column
-    # returns a RangeIndex, which pandas would store as metadata instead of a
-    # column, and the ids would vanish. index=True forces materialisation of
-    # whatever we hand it, so the two together are belt and braces.
+    # pd.Index rather than set_index: on pandas 3, set_index infers a
+    # RangeIndex from any arithmetic sequence of ids, and a RangeIndex is
+    # stored as metadata rather than as a column -- so the file ends up with no
+    # `id` field for any non-pandas reader. index=True materialises whatever we
+    # hand it, so the two together are belt and braces. See the module
+    # docstring, and https://github.com/landmanbester/bluse/issues/5.
     idx = pd.Index(df[INDEX].to_numpy(), name=INDEX)
     out = df.drop(columns=[INDEX]).set_axis(idx, axis=0)
     os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)

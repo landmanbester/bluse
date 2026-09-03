@@ -357,19 +357,29 @@ only the name and the location of the id were wrong, so
 `bluse-features --migrate` rewrote them without re-extracting and every golden
 number reproduced to the digit.
 
-The interesting part is what adopting it exposed. The convention's own example
-snippet is
+The interesting part is what adopting it exposed. Writing `set_index("id")` —
+the obvious move when the ids arrive as a column, which is how ours do — makes
+**pandas 3** infer a `RangeIndex` from any arithmetic sequence of ids, and a
+RangeIndex is stored as `{kind: range, start, stop, step}` in the metadata
+rather than as a column. The file then has **no `id` field at all**. pandas
+still reproduces the values from start/stop/step, so a round-trip test inside
+pandas passes; pyarrow, polars, DuckDB and R/arrow see the feature columns and
+no ids, which for a convention that exists so groups can cross-match each
+other's work is the entire failure. pandas 2 writes the column either way.
 
-    pd.DataFrame(index=data_file['id'][:], data=features).to_parquet(path)
+I got this wrong twice before getting it right, and both errors are the kind
+this document exists for. I first wrote that the convention's *own snippet* was
+vulnerable — it is not; `pd.DataFrame(index=...)` gives a plain `Index` and
+writes the column. And I wrote that the ids "come back as 0…N−1, which looks
+exactly like having read them" — they do not; they round-trip correctly, and
+the loss is to every reader that is not pandas. Both claims came from
+generalising a single probe instead of running the cases. Running the cases
+took four minutes and changed the finding, the shared note, and this paragraph.
 
-and if a dataset's ids happen to run 0, 1, 2 … N−1, pandas turns that into a
-`RangeIndex` and stores it as **three numbers in the file metadata instead of
-writing an id column at all**. The ids are then not in the file, and a reader
-gets 0…N−1 back — which is indistinguishable from having read them correctly.
-None of our seven deliveries starts at id 0. That is luck, not protection, and
-it is the same shape as [wrong turn 24](#24--a-file-described-a-protection-that-did-not-exist):
-a safeguard everyone believes is in place, absent in fact, and silent about it.
-The note went back into the shared document for the groups whose ids might.
+Reported as [issue #5](https://github.com/landmanbester/bluse/issues/5), and
+the note went into the shared document — a contiguous slice of a catalogue is
+the easy way to end up with arithmetic ids, so other groups are more exposed to
+this than we were.
 
 There is no clever lesson here. Four days of building on an interface we
 assumed rather than asked about, resolved in one conversation. **Ask what the

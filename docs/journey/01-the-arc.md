@@ -244,10 +244,18 @@ having never asked whether an interface existed.
 It cost an afternoon and nothing scientific — the numbers were already right, so
 `bluse-features --migrate` rewrote 830 MB under the new names without
 re-extracting and every golden value reproduced to the digit. But adopting it
-turned up one more silent trap, and of a familiar shape: the convention's own
-example snippet loses the ids entirely if a dataset's happen to run 0, 1, 2 …
-N−1, because pandas stores that index as metadata instead of as a column, and
-the reader gets 0…N−1 back with no error. None of our seven files starts at
-zero. That is luck, which is exactly what the day's earlier finding had been
-about, and the note went back into the shared document for the groups whose
-files might.
+turned up one more silent trap, and of a familiar shape: on pandas 3,
+`set_index("id")` makes any arithmetic run of ids into a `RangeIndex`, which is
+stored as metadata rather than as a column — so the file carries no `id` field,
+pandas still reads it back correctly from start/stop/step, and every non-pandas
+reader gets features with no ids and no error. Reported upstream, and the note
+went into the shared document, because a contiguous slice of a catalogue is the
+easy way to end up with arithmetic ids and other groups are more exposed than
+we were.
+
+My first two write-ups of that trap were both wrong — I blamed the convention's
+own snippet, which is safe, and claimed the ids came back as 0…N−1, which they
+do not — because I generalised from one probe instead of running the cases. The
+correction took four minutes and is recorded with the finding. On the last day
+of a workshop about not trusting your own confident summaries, that is roughly
+the right note to end on.

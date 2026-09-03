@@ -1,11 +1,13 @@
 """
 The workshop's feature-delivery convention (features/format.md).
 
-Three of these tests exist because the convention is easy to break silently: a
-RangeIndex is stored as metadata rather than as a column, so the ids can vanish
-without any error; and naming `id` in `columns=` returns it as the index rather
-than as a column, so `df["id"]` raises even though you asked for it. Both are
-cheap to get wrong and expensive to notice.
+Several of these tests exist because the convention is easy to break silently.
+On pandas 3, `set_index` on arithmetic ids gives a RangeIndex, which is stored
+as metadata rather than as a column, so the file ends up with no `id` field --
+invisible to a pandas reader, fatal to every other one. And naming `id` in
+`columns=` returns it as the index rather than as a column, so `df["id"]`
+raises even though you asked for it. Both are cheap to get wrong and expensive
+to notice.
 """
 
 import os
@@ -53,23 +55,57 @@ def test_a_foreign_method_is_not_mistaken_for_ours():
 # --- the two traps --------------------------------------------------------
 
 
-def test_contiguous_ids_are_still_written_as_a_column(tmp_path):
+# Every one of these is an arithmetic sequence, which is what pandas 3 turns
+# into a RangeIndex -- not just the 0..N-1 case. Ascending, offset, stepped and
+# descending all trip it.
+ARITHMETIC_IDS = [
+    [0, 1, 2, 3, 4],
+    [100, 101, 102, 103, 104],
+    [7, 9, 11, 13, 15],
+    [5, 4, 3, 2, 1],
+]
+
+
+@pytest.mark.parametrize("ids", ARITHMETIC_IDS)
+def test_arithmetic_ids_are_still_written_as_a_column(ids, tmp_path):
     """
-    THE TRAP. `set_index` on a perfect 0..N-1 column gives a RangeIndex, which
-    pandas stores as three numbers in the metadata rather than as data. Without
-    index=True the ids are simply not in the file, and the reader gets 0..N-1
-    back -- which is indistinguishable from having read them.
+    THE TRAP. On pandas 3, `set_index("id")` on any arithmetic run of ids gives
+    a RangeIndex, which pandas stores as start/stop/step in the metadata rather
+    than as a column. The file then has no `id` field at all -- and because
+    pandas reconstructs the values from those three numbers, a pandas-only
+    round trip cannot see it. write() passes index=True.
     """
     import pyarrow.parquet as pq
 
-    dest = FIO.write(_frame(np.arange(5, dtype=np.int32)),
+    dest = FIO.write(_frame(np.array(ids, dtype=np.int32)),
                      str(tmp_path / FIO.filename("toy")))
     assert "id" in pq.read_schema(dest).names
+    assert FIO.read(dest)["id"].tolist() == ids
 
-    # And the naive version really does lose them, which is why we do not use it.
+
+@pytest.mark.parametrize("ids", ARITHMETIC_IDS)
+def test_the_naive_write_really_does_drop_the_id_field(ids, tmp_path):
+    """
+    Why write() cannot just call set_index. Guards the reason, not only the
+    behaviour -- if a future pandas stops inferring RangeIndex here, this test
+    fails and the module docstring needs revisiting rather than the code.
+
+    Note what is and is not lost: pandas reads the values back correctly, so
+    the assertion has to be about the SCHEMA. Anything checking only the values
+    would pass while the file was unusable to pyarrow, polars or R/arrow.
+    """
+    import pyarrow.parquet as pq
+
     naive = tmp_path / "naive.parquet"
-    _frame(np.arange(5, dtype=np.int32)).set_index("id").to_parquet(naive)
+    df = _frame(np.array(ids, dtype=np.int32)).set_index("id")
+    df.to_parquet(naive)
+
+    if type(df.index).__name__ != "RangeIndex":
+        pytest.skip("this pandas does not infer a RangeIndex from set_index")
+
     assert "id" not in pq.read_schema(naive).names
+    assert pd.read_parquet(naive).index.tolist() == ids, \
+        "the values do round-trip through pandas -- that is what makes it silent"
 
 
 def test_reading_a_column_subset_may_name_the_id(tmp_path):
