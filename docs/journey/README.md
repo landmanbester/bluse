@@ -15,7 +15,7 @@ withdrawn**, two of them by a reviewer within hours of the first outside read.
 | file | what it is | talk section |
 |---|---|---|
 | [`01-the-arc.md`](01-the-arc.md) | what happened, in order | the spine |
-| [`02-wrong-turns.md`](02-wrong-turns.md) | twenty-four things we got wrong, and how each surfaced | the heart |
+| [`02-wrong-turns.md`](02-wrong-turns.md) | twenty-five things we got wrong, and how each surfaced | the heart |
 | [`03-what-it-taught-us.md`](03-what-it-taught-us.md) | the working method that emerged from all that | the close |
 
 **Every claim here is checkable.** Commit hashes, file paths and measured

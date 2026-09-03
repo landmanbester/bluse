@@ -8,7 +8,7 @@ replaces "here are some outliers". Jacobson-Bell et al. 2025 identified ~59
 distinct RFI families this way and cut false-positive hits by 93.1% (events by
 99.3%, 288 -> 2). See papers/GLOBULAR-technical-reference.md.
 
-    bluse-cluster                                          # all_features.parquet
+    bluse-cluster                                  # all_globular_features.parquet
     bluse-cluster --file sband_short
     bluse-cluster --epochs 6 --batch 3000                  # GLOBULAR's scheme
     bluse-cluster --min-cluster-size 10
@@ -91,6 +91,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from . import feature_io as FIO
 from . import features as F
 from . import diagnostics
 from . import matching
@@ -476,12 +477,11 @@ def main():
     args.outdir = args.outdir or paths.clusters_dir()
     print(paths.banner())
 
-    src = os.path.join(args.featdir,
-                       f"{args.file}_features.parquet" if args.file
-                       else "all_features.parquet")
-    if not os.path.exists(src):
-        sys.exit(f"Missing {src}\nRun:  bluse-features")
-    df = pd.read_parquet(src)
+    src = FIO.find(args.file or FIO.COMBINED, args.featdir)
+    if src is None:
+        sys.exit(f"Missing {FIO.path(args.file or FIO.COMBINED, args.featdir)}"
+                 f"\nRun:  bluse-features")
+    df = FIO.read(src)
     df = df[df.feature_ok].reset_index(drop=True)
     tag = args.file or "all"
     print(f"{tag}: {len(df):,} hits with usable features")

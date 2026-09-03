@@ -172,8 +172,17 @@ bluse-features --list          # what features are registered, without running
 ```
 
 Streams the stamp cubes, runs every feature in the registry, and writes
-`features/<name>_features.parquet` plus a combined `features/all_features.parquet`.
-This is the step that reads the 21 GB, and the only one that takes real time.
+`features/<dataset>_globular_features.parquet` plus a combined
+`features/all_globular_features.parquet`. This is the step that reads the
+21 GB, and the only one that takes real time.
+
+The filename and the `id` index are the workshop's delivery convention, so a
+feature set can be cross-matched against anyone else's; `globular` names our
+extraction method. See
+[`docs/feature-delivery-format.md`](docs/feature-delivery-format.md) — including
+two ways of breaking the convention that fail silently. If you have a workspace
+from before it, `bluse-features --migrate` rewrites the old files under the new
+name without re-extracting.
 
 It needs `catalogues/` from step 2 — it joins the Track A flags onto each hit
 for provenance.
@@ -311,7 +320,9 @@ catalogues/*_cat.parquet       every hit + 8 boolean flag_* columns + pass_all
     │
     │  bluse-features          streams the cubes, ~7 min
     ▼
-features/*_features.parquet    1,611,678 rows × 16 features + weak labels
+features/*_globular_features.parquet
+                               1,611,678 rows × 16 features + weak labels,
+                               indexed by hit `id`
     │
     │  bluse-cluster           HDBSCAN, iterative batching
     ▼
@@ -395,7 +406,7 @@ The point is not to score hits as anomalous. It is to *name the RFI*, so that
 what remains is a short list of things nothing accounted for.
 
 ```bash
-bluse-cluster                              # all_features.parquet
+bluse-cluster                              # all_globular_features.parquet
 bluse-cluster --file sband_short
 bluse-cluster --mode single --sample 60000
 ```
@@ -546,8 +557,8 @@ were re-delivered repaired on 2026-09-02, so the "clean file" item is closed.)*
 
 Three days, 78 commits, and a much longer list of things that turned out not to
 be true. [`docs/journey/`](docs/journey/) is the narrative record — what
-happened in order, the seventeen wrong turns, and the working method that came
-out of them. Of four planned improvements, three were rejected by measuring
+happened in order, the twenty-five wrong turns, and the working method that
+came out of them. Of four planned improvements, three were rejected by measuring
 them; the one unambiguous win sat in the backlog for the whole three days.
 
 ## Track E — the RFI score

@@ -6,13 +6,11 @@ aug_2026_workshop/features/ is gitignored and the data is not in the repo.
 Every number below states the file it was measured on.
 """
 
-import os
-
 import numpy as np
-import pandas as pd
 import pytest
 
 from bluse import diagnostics as D
+from bluse import feature_io as FIO
 from bluse import features as F
 from bluse import paths
 
@@ -24,10 +22,10 @@ _CACHE = {}
 def _audit(name):
     if name in _CACHE:
         return _CACHE[name]
-    path = os.path.join(paths.features_dir(), f"{name}_features.parquet")
-    if not os.path.exists(path):
+    path = FIO.find(name, paths.features_dir())
+    if path is None:
         pytest.skip(f"no {name} feature matrix in this workspace")
-    df = pd.read_parquet(path)
+    df = FIO.read(path)
     df = df[df.feature_ok].reset_index(drop=True)
     cols = [c + "_n" for c in F.all_columns()
             if c + "_n" in df.columns and not c.endswith("_saturated")

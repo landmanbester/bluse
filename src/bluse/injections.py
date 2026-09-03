@@ -41,6 +41,7 @@ the pair. A result quoted without its control is not a result.
 
 import numpy as np
 
+from . import feature_io as FIO
 from . import features as F
 
 # Gaussian sigma of the injected carrier, in Hz. Roughly two channels at L and
@@ -694,12 +695,13 @@ def main():
     print(paths.banner())
 
     t0 = time.time()
-    src = os.path.join(paths.features_dir(), "all_features.parquet")
-    if not os.path.exists(src):
-        raise SystemExit(paths.missing_workspace_message("all_features.parquet",
-                                                         src))
+    src = FIO.find(FIO.COMBINED, paths.features_dir())
+    if src is None:
+        want = FIO.path(FIO.COMBINED, paths.features_dir())
+        raise SystemExit(paths.missing_workspace_message(
+            FIO.filename(FIO.COMBINED), want))
     raw = [c[:-2] for c in E.FEATURE_SETS["stamp"]]
-    ft = pd.read_parquet(src, columns=sorted(set(
+    ft = FIO.read(src, columns=sorted(set(
         raw + E.FEATURE_SETS["stamp"] +
         ["weak_label", "group_id", "file", "id", "snr"])))
 

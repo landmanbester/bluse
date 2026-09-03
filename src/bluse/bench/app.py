@@ -5,7 +5,8 @@ Cluster Bench -- interactive HDBSCAN exploration for the BLUSE feature matrix.
     bluse-bench                       # then open http://127.0.0.1:8000
     bluse-bench --port 8080 --host 0.0.0.0
 
-Reads <workspace>/features/*_features.parquet, so run `bluse-features` first.
+Reads <workspace>/features/*_globular_features.parquet, so run
+`bluse-features` first.
 Stamp thumbnails come from <workspace>/data/<file>.h5.
 
 Why this exists: the Track B defaults cluster badly, and the reason is not
@@ -45,6 +46,7 @@ from fastapi.templating import Jinja2Templates
 from sklearn.cluster import HDBSCAN
 from sklearn.decomposition import PCA
 
+from .. import feature_io as FIO
 from .. import features as F
 from .. import paths
 # scale() lives in diagnostics so the Bench and the CLI cannot drift
@@ -140,12 +142,9 @@ def available_files():
     feat = paths.features_dir()
     if not os.path.isdir(feat):
         return []
-    out = []
-    for f in sorted(os.listdir(feat)):
-        if f.endswith("_features.parquet") and not f.startswith("all_"):
-            out.append(f.replace("_features.parquet", ""))
-    if os.path.exists(os.path.join(feat, "all_features.parquet")):
-        out.append("all")
+    out = sorted(FIO.discover(feat))
+    if FIO.find(FIO.COMBINED, feat):
+        out.append(FIO.COMBINED)
     return out
 
 
@@ -165,8 +164,10 @@ def load_dataset(name, sample, seed):
     if key in DATASETS:
         return DATASETS[key]
 
-    path = os.path.join(paths.features_dir(), f"{name}_features.parquet")
-    df = pd.read_parquet(path)
+    path = FIO.find(name, paths.features_dir())
+    if path is None:
+        raise FileNotFoundError(FIO.path(name, paths.features_dir()))
+    df = FIO.read(path)
     df = df[df.feature_ok].reset_index(drop=True)
     cols = feature_columns(df)
     X = np.array(df[cols].to_numpy(dtype=np.float64), copy=True)
@@ -803,7 +804,8 @@ def main():
     # does and stop, unless the caller explicitly asked for an empty start.
     if not found and not a.allow_empty:
         sys.exit(paths.missing_workspace_message(
-            "feature matrices (*_features.parquet)", paths.features_dir())
+            f"feature matrices (*_{FIO.METHOD}{FIO.SUFFIX})",
+            paths.features_dir())
             + "\n\nIf the workspace is right and you have not extracted "
               "features yet, run bluse-features -- or start anyway with "
               "--allow-empty.")

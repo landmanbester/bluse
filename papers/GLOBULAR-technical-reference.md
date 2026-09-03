@@ -49,7 +49,7 @@ Benchmarked against Choza et al. 2024: 97 of the 123 targets in the BL nearby-ga
 
 Two details worth carrying:
 
-- **Duplicates are harmless to turboSETI and fatal to density clustering.** 12.3% of the raw hits were duplicates. They do not change turboSETI's conclusions but they inflate local density, which is exactly what HDBSCAN keys on. We hit the same issue: 8,116 rows shared between `mk_sample_hits.h5` and `lband_long.h5`, deduplicated on `id` in `all_features.parquet`.
+- **Duplicates are harmless to turboSETI and fatal to density clustering.** 12.3% of the raw hits were duplicates. They do not change turboSETI's conclusions but they inflate local density, which is exactly what HDBSCAN keys on. We hit the same issue: 8,116 rows shared between `mk_sample_hits.h5` and `lband_long.h5`, deduplicated on `id` in `all_globular_features.parquet`.
 - **turboSETI underestimates SNR by ~3.3×** (per Choza et al. 2024), so a nominal SNR-10 search is really an SNR-33 search. Figure 1 plots the raw uncorrected values. Relevant if comparing SNR distributions to ours.
 
 **Injections, two distinct sets — do not conflate:**

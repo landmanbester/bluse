@@ -232,3 +232,22 @@ publication with the BLUSE team. But **nothing in the repository recorded it**,
 and the document that should have was still asserting the opposite. A protection
 described in a file and absent in fact is worse than no protection described,
 because it is the one people check.
+
+Then the day's genuinely useful correction arrived from outside the code
+entirely. The repository owner brought back `format.md` from the BLUSE side: the
+workshop had a **written convention for delivering a feature set** —
+`<dataset>_<method>_features.parquet`, with the hit `id` as the index, so that
+any group's features can be cross-matched against any other's. We had spent four
+days writing `<dataset>_features.parquet` with the id as an ordinary column,
+having never asked whether an interface existed.
+
+It cost an afternoon and nothing scientific — the numbers were already right, so
+`bluse-features --migrate` rewrote 830 MB under the new names without
+re-extracting and every golden value reproduced to the digit. But adopting it
+turned up one more silent trap, and of a familiar shape: the convention's own
+example snippet loses the ids entirely if a dataset's happen to run 0, 1, 2 …
+N−1, because pandas stores that index as metadata instead of as a column, and
+the reader gets 0…N−1 back with no error. None of our seven files starts at
+zero. That is luck, which is exactly what the day's earlier finding had been
+about, and the note went back into the shared document for the groups whose
+files might.

@@ -64,6 +64,7 @@ import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.model_selection import GroupKFold
 
+from . import feature_io as FIO
 from . import features as F
 
 # Every feature column in the parquet is float64, and every other science path
@@ -766,13 +767,14 @@ def main():
     print(paths.banner())
 
     t0 = time.time()
-    src = os.path.join(paths.features_dir(), "all_features.parquet")
-    if not os.path.exists(src):
-        raise SystemExit(paths.missing_workspace_message("all_features.parquet",
-                                                         src))
+    src = FIO.find(FIO.COMBINED, paths.features_dir())
+    if src is None:
+        want = FIO.path(FIO.COMBINED, paths.features_dir())
+        raise SystemExit(paths.missing_workspace_message(
+            FIO.filename(FIO.COMBINED), want))
     need = sorted(set(FEATURE_SETS["all"] + FLAG_COLUMNS + PROVENANCE + [
         "weak_label", "group_id", "coarseChannel", "pass_all"]))
-    df = pd.read_parquet(src, columns=need)
+    df = FIO.read(src, columns=need)
     print(f"{len(df):,} hits, {df.group_id.nunique()} observations, "
           f"{df.file.nunique()} files  [{time.time() - t0:.0f}s]")
 

@@ -11,11 +11,9 @@ Gitignored data, so this cannot gate a commit. Every number states what it was
 measured on.
 """
 
-import os
-
-import pandas as pd
 import pytest
 
+from bluse import feature_io as FIO
 from bluse import paths
 from bluse import track_e_score as E
 
@@ -27,13 +25,13 @@ _CACHE = {}
 def _report():
     if "r" in _CACHE:
         return _CACHE["r"]
-    path = os.path.join(paths.features_dir(), "all_features.parquet")
-    if not os.path.exists(path):
-        pytest.skip("no all_features.parquet in this workspace")
+    path = FIO.find(FIO.COMBINED, paths.features_dir())
+    if path is None:
+        pytest.skip(f"no {FIO.filename(FIO.COMBINED)} in this workspace")
     need = sorted(set(E.FEATURE_SETS["all"] + E.FLAG_COLUMNS + [
         "weak_label", "group_id", "file", "snr", "frequency", "driftRate",
         "coarseChannel", "n_beams"]))
-    _CACHE["r"] = E.validate(pd.read_parquet(path, columns=need),
+    _CACHE["r"] = E.validate(FIO.read(path, columns=need),
                              n_splits=5, seed=0, verbose=False)
     return _CACHE["r"]
 

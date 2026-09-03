@@ -7,10 +7,10 @@ tests/workspace/  golden values measured on real feature matrices. Catches a
                   the data is not in the repository.
 """
 
-import os
 
 import pytest
 
+from bluse import feature_io as FIO
 from bluse import paths
 
 
@@ -18,8 +18,7 @@ def pytest_collection_modifyitems(config, items):
     """Skip workspace-marked tests when there is no features/ to read."""
     try:
         feat = paths.features_dir()
-        have = os.path.isdir(feat) and any(
-            f.endswith("_features.parquet") for f in os.listdir(feat))
+        have = bool(FIO.discover(feat, include_combined=True))
     except Exception:
         have = False
     if have:

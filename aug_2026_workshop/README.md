@@ -64,8 +64,8 @@ was disproportionately zero-drift. Any per-band result computed on
 below has already been re-derived on the repaired file.
 
 **Don't let a stale copy into a run.** `bluse-features` with no arguments globs
-`data/*.h5`, and `--combine-only` globs `features/*_features.parquet`, so a
-leftover `lband_short_clean_features.parquet` is still picked up.
+`data/*.h5`, and `--combine-only` globs `features/*_globular_features.parquet`,
+so a leftover `lband_short_clean_globular_features.parquet` is still picked up.
 `drop_superseded()` keeps whichever of the pair carries more *usable* rows and
 prints what it dropped — it used to prefer `_clean` by name, which after the
 repair would have discarded 402,377 good rows. Delete superseded per-file
@@ -76,12 +76,12 @@ To re-run the pipeline after a re-delivery:
 ```bash
 bluse-track-a data/lband_short.h5 data/uhf_long.h5   # catalogues first
 bluse-features data/lband_short.h5 data/uhf_long.h5  # then features
-bluse-features --combine-only                        # rebuild all_features
+bluse-features --combine-only                        # rebuild the combined table
 ```
 
-That last step matters: `bluse-features <files>` rebuilds `all_features.parquet`
-from **only the files it just extracted**, so without it the combined table
-silently shrinks to those files alone.
+That last step matters: `bluse-features <files>` rebuilds
+`all_globular_features.parquet` from **only the files it just extracted**, so
+without it the combined table silently shrinks to those files alone.
 
 ## Setup
 
@@ -154,7 +154,7 @@ counts are meaningless. 8,116 of its hits also appear in `lband_long` under the
 same `id`, frequency and beam: the same hit is counted in a mean of **1.87
 beams** there against **29.71** in `lband_long`. Of its 894 survivors, 848 are
 such duplicates — and only **15** of those survive Track A when the surrounding
-hits are present. `all_features.parquet` deduplicates on `id`, so the combined
+hits are present. `all_globular_features.parquet` deduplicates on `id`, so the combined
 table carries 46 mk survivors and 4,565 in total. See
 [`../docs/track-e-2026-09.md`](../docs/track-e-2026-09.md) §7.
 

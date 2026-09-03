@@ -436,7 +436,7 @@ def group_index(labels):
         k = 20,000   mask-per-cluster ~47 s      sort + reduceat 0.23 s
 
     The sort is O(n log n) once and flat in k, which matters because `leaf` on
-    all_features.parquet produces of order 80,000 clusters -- where the mask
+    all_globular_features.parquet produces of order 80,000 clusters -- where the mask
     pattern is minutes in centroids() alone, and worse in quality(), which
     groups seven times per call (two thresholds plus five permutations).
     """

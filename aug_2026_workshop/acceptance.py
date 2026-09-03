@@ -15,6 +15,7 @@ import sys
 import numpy as np
 import pandas as pd
 
+from bluse import feature_io as FIO
 from bluse import diagnostics as D
 from bluse import features as F
 from bluse import matching, metrics, paths
@@ -31,8 +32,10 @@ class DS:
 
 
 def load(name):
-    path = os.path.join(paths.features_dir(), f"{name}_features.parquet")
-    df = pd.read_parquet(path)
+    path = FIO.find(name, paths.features_dir())
+    if path is None:
+        raise SystemExit(f"No feature matrix for {name}. Run: bluse-features")
+    df = FIO.read(path)
     df = df[df.feature_ok].reset_index(drop=True)
     cols = [c + "_n" for c in F.all_columns()
             if c + "_n" in df.columns and not c.endswith("_saturated")

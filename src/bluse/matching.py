@@ -22,7 +22,7 @@ MEMORY IS O(k^2), NOT O(k). An earlier version of this docstring claimed
 scipy's nn-chain is O(n) in memory. That is wrong and was asserted without
 being measured -- peak allocation tracks the condensed distance matrix
 exactly (18 MB against 16 MB predicted at k=2,000; 162 MB against 144 MB at
-k=6,000). At the ~78,000 centroids `leaf` produces on all_features.parquet
+k=6,000). At the ~78,000 centroids `leaf` produces on all_globular_features.parquet
 the condensed matrix alone is 24.3 GB, so `match()` refuses rather than
 exhausting memory; raise MAX_CENTROIDS deliberately if you have the RAM.
 
@@ -63,7 +63,7 @@ def centroids(labels, X):
 
     Grouped by sort + reduceat rather than a mask per cluster: the latter is
     O(k*n), which is minutes at the ~80,000 clusters `leaf` produces on
-    all_features.parquet. See diagnostics.group_index.
+    all_globular_features.parquet. See diagnostics.group_index.
     """
     ids, rows, starts = diagnostics.group_index(labels)
     if not len(ids):

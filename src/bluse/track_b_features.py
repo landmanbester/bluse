@@ -10,15 +10,23 @@ input file that Track E can train on directly.
     bluse-features data/sband_short.h5
     bluse-features --sample 50000                    # per-file subsample
     bluse-features --list                            # show the registry
+    bluse-features --migrate                         # bring an old workspace across
 
-OUTPUT -- designed for Track E
-------------------------------
-`features/<name>_features.parquet` per input file, plus the combined
-`features/all_features.parquet` -- which is **deduplicated on `id`**, because
-8,116 hits appear in both mk_sample_hits.h5 and lband_long.h5 and would
-otherwise be double-weighted. Per-file outputs are never deduplicated.
+OUTPUT -- designed for Track E, delivered in the workshop's format
+------------------------------------------------------------------
+`features/<dataset>_globular_features.parquet` per input file, plus the
+combined `features/all_globular_features.parquet` -- which is **deduplicated on
+`id`**, because 8,116 hits appear in both mk_sample_hits.h5 and lband_long.h5
+and would otherwise be double-weighted. Per-file outputs are never
+deduplicated.
 
-One row per hit, columns in four groups:
+The name and the `id` index are the workshop's delivery convention, specified
+in `aug_2026_workshop/features/format.md` and implemented once in
+`feature_io.py` -- which is the only module that writes or reads a feature
+file, and documents the two ways the convention is easy to break silently.
+`globular` is our method's short name; `--method` changes it.
+
+One row per hit, `id` as the index, columns in four groups:
 
   provenance    file id row obsid sourceName beam frequency driftRate snr
                 power ra dec tstart numChannels n_beams n_beams_formed
@@ -57,12 +65,12 @@ import argparse
 import os
 import sys
 import time
-from glob import glob
 
 import h5py
 import numpy as np
 import pandas as pd
 
+from . import feature_io as FIO
 from . import features as F
 from . import paths
 from .paths import resolve_files
@@ -221,8 +229,7 @@ def extract(path, args):
               f"Rows kept with stamp_ok=False.")
 
     os.makedirs(args.outdir, exist_ok=True)
-    dest = os.path.join(args.outdir, f"{name}_features.parquet")
-    out.to_parquet(dest, index=False)
+    dest = FIO.write(out, FIO.path(name, args.outdir, args.method))
 
     ok = int(out.feature_ok.sum())
     print(f"  usable feature rows: {ok:,} / {len(out):,} ({100 * ok / len(out):.1f}%)")
@@ -382,7 +389,7 @@ def drop_superseded(all_df):
     return all_df[~all_df["file"].isin(drop)].reset_index(drop=True)
 
 
-def summarise(frames, outdir, dedupe=True):
+def summarise(frames, outdir, dedupe=True, method=FIO.METHOD):
     """Print feature health, then write the combined table Track E will read."""
     all_df = pd.concat(frames, ignore_index=True)
     all_df = drop_superseded(all_df)
@@ -409,8 +416,7 @@ def summarise(frames, outdir, dedupe=True):
           f"   ambiguous {int(vc.get(-1, 0)):>9,} ({100*vc.get(-1,0)/n:5.2f}%)")
     print(f"  groups (observations): {all_df.group_id.nunique():,}")
 
-    dest = os.path.join(outdir, "all_features.parquet")
-    all_df.to_parquet(dest, index=False)
+    dest = FIO.write(all_df, FIO.path(FIO.COMBINED, outdir, method))
     print(f"\n  wrote {dest}")
     return all_df
 
@@ -444,8 +450,18 @@ def main():
                         "By default the combined table is deduplicated on `id`; "
                         "per-file outputs are always left as they are")
     p.add_argument("--combine-only", action="store_true",
-                   help="rebuild all_features.parquet from the per-file "
-                        "parquets already in --outdir, without re-extracting")
+                   help=f"rebuild {FIO.filename(FIO.COMBINED)} from the "
+                        f"per-file parquets already in --outdir, without "
+                        f"re-extracting")
+    p.add_argument("--method", default=FIO.METHOD, metavar="NAME",
+                   help=f"short name for this extraction method, used in the "
+                        f"output filename <dataset>_<method>_features.parquet "
+                        f"(default {FIO.METHOD}). See features/format.md")
+    p.add_argument("--migrate", action="store_true",
+                   help="rewrite pre-convention <dataset>_features.parquet "
+                        "files in --outdir under the conforming name, with "
+                        "`id` as the index. Reads and rewrites, so nothing "
+                        "has to be re-extracted; originals are left in place")
     p.add_argument("--list", action="store_true", help="print the registry and exit")
     paths.add_workspace_arg(p)
     args = p.parse_args()
@@ -458,17 +474,40 @@ def main():
     args.outdir = args.outdir or paths.features_dir()
     print(paths.banner())
 
+    if args.migrate:
+        moved, already = FIO.migrate(args.outdir, args.method)
+        for src, dest in moved:
+            print(f"  {os.path.basename(src)}  ->  {os.path.basename(dest)}")
+        if moved:
+            print(f"\nmigrated {len(moved)} file(s). The originals are still "
+                  f"there; delete them once you are happy.")
+        if already:
+            size = sum(os.path.getsize(p) for p in already) / 1e6
+            print(f"\n{len(already)} pre-convention file(s) already have a "
+                  f"conforming copy and were left alone ({size:,.0f} MB):")
+            print("  Delete them when you no longer want the old names:")
+            print("      rm " + " \\\n         ".join(already))
+        if not moved and not already:
+            print(f"nothing to migrate in {args.outdir} -- every feature file "
+                  f"there already follows the convention")
+        return
+
     if args.combine_only:
-        parts = sorted(glob(os.path.join(args.outdir, "*_features.parquet")))
-        parts = [p for p in parts if not p.endswith("all_features.parquet")]
-        if not parts:
+        found = FIO.discover(args.outdir, args.method)
+        if not found:
             sys.exit(f"No per-file parquets in {args.outdir}")
-        print(f"combining {len(parts)} existing per-file parquets")
-        frames = [pd.read_parquet(p) for p in parts]
+        n_legacy = sum(FIO.is_legacy(p, args.method) for p in found.values())
+        print(f"combining {len(found)} existing per-file parquets: "
+              f"{', '.join(sorted(found))}")
+        if n_legacy:
+            print(f"  {n_legacy} still use the pre-convention filename. "
+                  f"Run `bluse-features --migrate` to bring them across.")
+        frames = [FIO.read(found[k]) for k in sorted(found)]
     else:
         frames = [extract(f, args) for f in resolve_files(args.files)]
     if frames:
-        summarise(frames, args.outdir, dedupe=not args.no_dedupe)
+        summarise(frames, args.outdir, dedupe=not args.no_dedupe,
+                  method=args.method)
 
 
 if __name__ == "__main__":

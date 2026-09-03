@@ -1,4 +1,4 @@
-# Twenty-four wrong turns
+# Twenty-five wrong turns
 
 The useful part of the record. Each entry: what we believed, what was true, how
 it surfaced, and what it cost.
@@ -17,6 +17,7 @@ Read the **How it surfaced** line first. Counted honestly:
 | checked a claim that had been taken on trust | 1 |
 | looked at a rendered output | 1 |
 | noticed a test count change | 1 |
+| the collaborators handed over a document we had not thought to ask for | 1 |
 
 After day 3 the largest category is **adversarial review** — but that is
 because day 3 was the first time anything was reviewed by someone who had not
@@ -340,6 +341,40 @@ computation is worse than no record* — applied to a fact rather than a number,
 and it is the worst case of the four, because a protection described in a file
 and absent in fact is the one people check instead of checking reality.
 
+### 25 — We never asked whether there was a format to deliver in
+
+**Believed:** the shape of a feature file was ours to choose.
+**True:** the workshop had a written convention the whole time —
+`<dataset>_<method>_features.parquet`, hit `id` as the index — so that any
+group's features can be cross-matched against any other's. We had written
+`<dataset>_features.parquet` with `id` as an ordinary column and a
+`RangeIndex`, for four days, across seven files and 830 MB.
+**Surfaced:** the repository owner obtained `format.md` from the BLUSE side and
+handed it over on the last morning. Not by review, not by measurement — by
+someone asking a question of the collaborators that we had not thought to ask.
+**Cost:** an afternoon, and nothing scientific. The files were already correct;
+only the name and the location of the id were wrong, so
+`bluse-features --migrate` rewrote them without re-extracting and every golden
+number reproduced to the digit.
+
+The interesting part is what adopting it exposed. The convention's own example
+snippet is
+
+    pd.DataFrame(index=data_file['id'][:], data=features).to_parquet(path)
+
+and if a dataset's ids happen to run 0, 1, 2 … N−1, pandas turns that into a
+`RangeIndex` and stores it as **three numbers in the file metadata instead of
+writing an id column at all**. The ids are then not in the file, and a reader
+gets 0…N−1 back — which is indistinguishable from having read them correctly.
+None of our seven deliveries starts at id 0. That is luck, not protection, and
+it is the same shape as [wrong turn 24](#24--a-file-described-a-protection-that-did-not-exist):
+a safeguard everyone believes is in place, absent in fact, and silent about it.
+The note went back into the shared document for the groups whose ids might.
+
+There is no clever lesson here. Four days of building on an interface we
+assumed rather than asked about, resolved in one conversation. **Ask what the
+people you are delivering to expect, before you build the thing you deliver.**
+
 ---
 
 ## The tally
@@ -352,6 +387,7 @@ and absent in fact is the one people check instead of checking reality.
 | unambiguous wins | 1 — from the backlog, on the last night |
 | **of that win's published conclusions, later withdrawn** | **4 of 8** |
 | defects where the record disagreed with reality | **4** |
+| interfaces we assumed instead of asking about | **1** |
 | defects found by adversarial review rather than by us | **7** |
 | tests that could not have failed | **3** |
 | claims I listed as *safe as stated* that were not | **1** |

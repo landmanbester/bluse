@@ -3,6 +3,16 @@
 **Updated:** 2026-09-03, after Track E. One P0 question is OPEN (P0-4).
 **Purpose:** enough context to resume any item without re-deriving it.
 
+**Filename note (2026-09-03):** feature files now follow the workshop's
+delivery convention — `<dataset>_globular_features.parquet`, hit `id` as the
+index (`aug_2026_workshop/features/format.md`, implemented in
+`src/bluse/feature_io.py`). Dated documents below, and every measurement record
+in `docs/`, name the **pre-convention** files: `sband_short_features.parquet` is
+today's `sband_short_globular_features.parquet`, `all_features.parquet` is
+`all_globular_features.parquet`. The contents did not change; only the name and
+where the `id` lives. `bluse-features --migrate` converts an old workspace
+without re-extracting.
+
 **Data note (2026-09-02):** `lband_short.h5` and `uhf_long.h5` were re-delivered
 without the corrupt stamp regions. All feature parquets for those two files were
 re-extracted and `all_features.parquet` rebuilt. **No conclusion in P0-1, P0-2,

@@ -43,6 +43,7 @@ src/bluse/                       THE CODE. Installed; importable as `bluse`.
   rfi_masks.py                   MeerKAT RFI masks, provenance-tagged
   track_a_filter.py              Track A: classical filtering baseline
   features.py                    Track B: extensible feature registry
+  feature_io.py                  the workshop's feature-file convention
   track_b_features.py            Track B: feature extraction driver
   track_b_cluster.py             Track B: HDBSCAN clustering
   bench/                         Cluster Bench: FastAPI + htmx tuning UI
@@ -53,7 +54,8 @@ aug_2026_workshop/               THE WORKSPACE. Data in, results out.
   brainstorming.md               technique survey + Tracks A-E plan
   data/                          HDF5 files + filtered_hits.csv (untracked).
   catalogues/                    Track A output (.csv tracked, .parquet not)
-  features/                      Track B feature matrices (untracked, ~350 MB)
+  features/                      Track B feature matrices (untracked, ~830 MB)
+    format.md                    the workshop's delivery convention (theirs)
   clusters/                      Track B clustering output
   masks/                         empirically derived RFI masks
   plots/                         PNGs from bluse-explore (untracked)
@@ -223,8 +225,9 @@ itself.
    curated sample carved out of `lband_long`, not an independent file. Our seven
    files hold 1,619,794 rows but only **1,611,678 unique `id`s**.
 
-   `track_b_features.py` deduplicates the combined `all_features.parquet` on
-   `id`, keeping the copy from the larger file; per-file outputs are left alone.
+   `track_b_features.py` deduplicates the combined
+   `all_globular_features.parquet` on `id`, keeping the copy from the larger
+   file; per-file outputs are left alone.
    Anything else that pools files must do the same or it silently
    double-weights those hits. It is not a leakage risk — every duplicate pair
    shares an `obsid`, so `group_id` splitting keeps both copies together — but
@@ -272,8 +275,9 @@ itself.
 
    **The de-duplication hazard survived the fix, with its sign reversed.** A
    bare `bluse-features` globs `data/*.h5`, and `--combine-only` globs
-   `features/*_features.parquet`, so a stale `lband_short_clean_features.parquet`
-   left on disk is still picked up. `drop_superseded()` used to prefer `_clean`
+   `features/*_globular_features.parquet`, so a stale
+   `lband_short_clean_globular_features.parquet` left on disk is still picked
+   up. `drop_superseded()` used to prefer `_clean`
    **by name**, which after the repair would have silently discarded 402,377
    good rows. It now keeps whichever file carries more **usable** rows, which
    gives the same answer on the old data and the right one on the new. Delete
@@ -318,6 +322,25 @@ itself.
   actual files (the `incoherentPower` assumption most notably).
 - Scripts are CLI-driven with `argparse` subcommands, write outputs to a
   directory, and print the path.
+- **Feature files obey the workshop's delivery convention**, specified by the
+  BLUSE side in `aug_2026_workshop/features/format.md` (untracked — it is the
+  workshop's shared document and names other people's unpublished feature sets;
+  our half of it is `docs/feature-delivery-format.md`):
+  `<dataset>_<method>_features.parquet`, with the hit `id` as the index. Ours
+  are `<dataset>_globular_features.parquet`. `feature_io.py` is the only module
+  that writes or reads one — never call `to_parquet`/`read_parquet` on a
+  feature matrix directly, because two ways of breaking the convention are
+  completely silent:
+    - `set_index("id")` on ids that happen to run 0..N-1 yields a *RangeIndex*,
+      which pandas stores as metadata instead of a column. The ids are then not
+      in the file, and a reader gets 0..N-1 back, which looks identical to
+      having read them. `FIO.write` passes `index=True`, which forces
+      materialisation. No delivery we hold starts at 0; that is luck.
+    - `pd.read_parquet(path, columns=["id", ...])` returns the id as the
+      *index*, not a column, so `df["id"]` raises `KeyError` even though you
+      named it. `FIO.read` always hands the id back as a column.
+  Everything in-memory still carries `id` as an ordinary column; only the
+  on-disk layout changed.
 
 ## Where things stand
 
@@ -361,7 +384,7 @@ Three things to carry:
   their *minimum* sweep bandwidth. `f08_turning_bw_hz` is consequently
   unresolved for ~72% of hits (companion `f08_turning_bw_saturated` flag; the
   clusterer excludes it by default).
-- Extraction over all 1,619,794 hits takes ~7 min; `all_features.parquet` holds
+- Extraction over all 1,619,794 hits takes ~7 min; `all_globular_features.parquet` holds
   1,611,678 rows after deduplication on `id`. Clustering the combined table
   gives **1,491 clusters over 1,281,791 hits**, 87 noise, and **44 hits that are
   unclustered and confined to ≤4 beams** — the actual output. Re-run 2026-09
@@ -409,7 +432,7 @@ GLOBULAR's spec (`--scaling robust`, default) because their transforms alone
 leave feature IQRs spanning 0.036 to 5.88 on our data, so Euclidean distance
 became drift rate and nothing else.
 
-**Next — Track E**: weak-supervision classifier. `features/*_features.parquet`
+**Next — Track E**: weak-supervision classifier. `features/*_globular_features.parquet`
 already carries `weak_label` (1 RFI / 0 spatially-confined / −1 ambiguous),
 `weak_label_reason` and `group_id`. **Split on `group_id`** — hits from one
 observation share a pointing, an RFI environment and a calibration, so a random
