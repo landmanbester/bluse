@@ -626,7 +626,15 @@ substantially churn. See `../docs/track-e-2026-09.md` §9.
 
 Two thirds of the vetting list removed with a per-hit reason.
 
-### Three things to know before quoting any of it
+### Four things to know before quoting any of it
+
+0. **It inverts at high brightness.** Synthetic injections (2026-09-03,
+   `bluse-inject --fluctuate`, written up in
+   [`../docs/injections-2026-09.md`](../docs/injections-2026-09.md)) put a known
+   real signal into real stamps: above catalogue SNR ≈10 the score moves the
+   wrong way, and at ≈51 with no drift **91%** of injected real signals are
+   pushed above the *pruning* threshold. The shipped 0.1 shortlist threshold is
+   nonetheless the best of those swept, by signal kept per survivor admitted.
 
 1. **A low score is not a candidate.** The labels are positive-unlabelled:
    `weak_label == 0` means ≤2 beams, not verified clean.

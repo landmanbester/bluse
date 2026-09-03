@@ -339,11 +339,31 @@ no improvement).
   survivor list. `bluse-score`.
 
   **New questions it raised, in priority order:**
-  1. **Synthetic injections are now the binding constraint.** Every Track E
-     number measures agreement with the spatial filter, not with truth. An
-     injection harness would give a real objective function and settle whether
-     the monotonicity is physics or an SNR gradient. This was already P2 §6;
-     it is now the highest-value item in the repository.
+  1. ~~**Synthetic injections are now the binding constraint.**~~ — **FIRST
+     RESULT 2026-09-03**, PR #3, [`injections-2026-09.md`](injections-2026-09.md).
+     Re-run after review corrected two errors in the first version (a √2 error
+     in the SNR axis, found by Copilot; a substrate set that was 42% confirmed
+     multi-beam RFI, found by review). Stratified by beam class, on the
+     single-beam population the score is deployed on:
+     - injecting a real drifting signal lifts shortlist retention from **0.428
+       to at best 0.581** — a modest gain, not a transformation;
+     - the paired shift **reverses** above catalogue SNR ≈10 (zero drift) to
+       ≈30 (0.3 Hz/s): the injection makes the hit look *more* like RFI;
+     - **pruning is NOT unaffected**, contrary to the first write-up: at
+       catalogue SNR ≈51 with no drift, **91%** of injected real signals land
+       above the 0.9 pruning threshold against a 33% control. That claim is
+       withdrawn.
+     - injecting into confirmed multi-beam RFI clears it into the shortlist up
+       to **46%** of the time — a demonstrated false-negative pathway.
+
+     Next, in value order: a **Gamma-fluctuating injection** (the current one is
+     a noiseless ridge whose temporal statistics no real detection has, and it
+     is ~10 lines); an **injected-vs-real discriminator** to bound the bright
+     arm's validity; **bandwidth in the grid**; a **drift-matched** column;
+     **real empty substrates** chosen on `x01_drift_residual` near its
+     pure-noise value rather than on catalogue SNR; and the **threshold sweep
+     with the cost axis**, which is the operating point this still has not
+     produced.
   2. **Did seed-averaging remove noise, or remove marginal detections?** The
      `contrarian` set halved, 3,303 → 1,515, when the score went to a
      three-seed mean. I wrote that up as removing churn. It is consistent with
@@ -385,6 +405,17 @@ no improvement).
   rows 1,605,678 → **2,014,055 (+25.4%)**, now exactly matching the team's
   `filtered_hits.csv`. See `aug_2026_workshop/README.md` and AGENTS.md gotcha 7.
 - **Per-antenna voltages** would enable imaging follow-up. Ask.
+- **The `_n` columns are normalised PER FILE, and nothing said so.**
+  `bluse-features` calls `normalise()` inside `extract()`, once per file, and
+  `summarise()` concatenates without re-normalising — so a `_n` value is a rank
+  within its own file, not within the survey. Measured:
+  `x01_drift_residual = 0.2790005` is 0.1523 in `lband_long` and 0.0253 in
+  `mk_sample_hits`. Found 2026-09-03 while chasing a measurement floor in the
+  injection harness. It is defensible — self-normalising each file arguably
+  helps cross-band transfer, and Track E's held-out-band numbers are consistent
+  with that — but **it is not what "normalised feature" implies**, and anything
+  comparing `_n` values across files is comparing ranks in different
+  distributions. Decide whether to keep it, and document it either way.
 - **`mk_sample_hits` is unusable for anything beam-derived.** Measured
   2026-09-03: 8,116 of its hits also appear in `lband_long` under the same
   `id`, frequency and beam, counted in a mean of **1.87 beams** there against
@@ -407,8 +438,17 @@ clusters — use DBCV if the `hdbscan` backend lands); removing the batching
 loop; making the embedding an input to the clusterer; rotation or
 frequency-flip augmentations anywhere near this data.
 
-Also: **do not make the repository public** or redistribute catalogue data
-without clearing it with the BLUSE team. Tracked survivor CSVs contain sky
+**DATA EXPOSURE — UNRESOLVED, 2026-09-03.** This section said "do not make the
+repository public". **The repository is public** (`gh repo view` reports
+PUBLIC), and the tracked derived tables — `catalogues/*_survivors.csv`,
+`scores/candidates.csv` (3,028 distinct `sourceName`), `scores/contrarian.csv`,
+`scores/injections.parquet` (2,160 real hits over 362 observations) — are
+world-readable. Whether clearance was obtained is **not recorded anywhere and
+must not be inferred from the repository being public**. Answer it, record it in
+`AGENTS.md`, and if the answer is no, gitignore the tables and rewrite history
+rather than deleting at HEAD.
+
+Otherwise: do not redistribute catalogue data Tracked survivor CSVs contain sky
 coordinates, Gaia/exotica source names and obsids from unpublished data
 destined for forthcoming publications. The MIT licence covers code and
 documentation only.

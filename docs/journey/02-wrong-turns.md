@@ -1,4 +1,4 @@
-# Seventeen wrong turns
+# Twenty-three wrong turns
 
 The useful part of the record. Each entry: what we believed, what was true, how
 it surfaced, and what it cost.
@@ -7,19 +7,25 @@ Read the **How it surfaced** line first. Counted honestly:
 
 | how it surfaced | n |
 |---|---:|
-| ran the planned experiment and believed the answer | **4** |
+| **adversarial review** (Copilot ×3, human reviewer ×3) | **6** |
+| ran the planned experiment and believed the answer | 4 |
 | investigated a result that felt implausible | 3 |
-| adversarial review (Copilot) | 2 |
 | reconciled two numbers that disagreed | 2 |
 | was asked to justify a confident claim | 2 |
+| ran a control that showed the test was confounded | 2 |
 | a measurement taken for another purpose | 1 |
 | checked a claim that had been taken on trust | 1 |
 | looked at a rendered output | 1 |
 | noticed a test count change | 1 |
 
-The largest single category is **running the experiment you planned and
-believing what it says** — which is worth sitting with, because three of those
-four were experiments expected to confirm an improvement and instead killed it.
+After day 3 the largest category is **adversarial review** — but that is
+because day 3 was the first time anything was reviewed by someone who had not
+written it. On the six days' work reviewed only by its author, the largest
+category was *running the planned experiment and believing what it says*, and
+three of those four killed an improvement they were expected to confirm.
+
+Both numbers point the same way: **nothing here was caught by reasoning
+harder.** It was caught by measuring, or by someone else looking.
 
 > **This table was itself wrong on first writing.** It originally read "six
 > found by an adversarial reviewer, five by writing a test, four by a
@@ -238,6 +244,85 @@ multiplier.
 
 ---
 
+## E. Day 3 — the result gets audited, and most of it moves
+
+### 18 — The SNR formula was not the matched filter
+
+**Believed:** `A·Σg/(σ·√Σg²)` was a matched-filter SNR, and the docstring said
+so at length.
+**True:** it takes its numerator from a **unit-weight** filter and its
+denominator from a **matched** one — not a consistent filter at all. Monte
+Carlo against the real statistic: asking for 20 delivered **14.19**, a factor
+of 1/√2. Every published x-axis label was wrong.
+**Surfaced:** Copilot, on the PR.
+**The test could not have caught it.** It asserted the algebraic inverse of the
+function under test, with `sigma=1`. It would only ever fail if someone edited
+the function and the test together. The replacement measures the statistic by
+simulation.
+
+### 19 — The substrate set was 42% confirmed multi-beam RFI
+
+**Believed:** filtering substrates on `snr <= 8` selects the emptiest cubes.
+**True:** low SNR does not imply few beams. The draw was **42.4% multibeam,
+44.4% ambiguous, 13.1% single-beam** — so the headline pooled the population
+the score is deployed on with the one it was trained to reject, and **the two
+respond in opposite directions.** Stratified, retention on single-beam
+substrates is 0.72 where the pooled number said 0.43.
+**Surfaced:** review, with one `groupby` on the artefact I had committed.
+
+### 20 — "Pruning is unaffected", published as safe, never measured
+
+The claim was that Track E's 2,988-hit pruned set was untouched by any of this.
+I put it under *safe as stated* in my own summary of what to trust.
+
+It had never been measured. Copilot's comment said exactly that: the experiment
+reported retention below 0.1 and said nothing about crossings above 0.9.
+Measured: at catalogue SNR ≈51 with no drift, **91.4% of injected real signals
+land above the pruning threshold**, against a 33% control. **A bright
+non-drifting sky signal would be actively discarded, not merely ranked low.**
+
+Of everything in this document, this is the one that would have done real
+damage, because it was the reassurance attached to the deliverable.
+
+### 21 — The diagnosis of my own measurement floor was misattributed
+
+**Believed and documented at length:** refitting the transforms shifted scores
+because `QuantileTransformer` redraws its 200,000-row subsample.
+**True:** **none of the 12 stamp columns uses a quantile transform.** They are
+`unit`, `log-unit`, `none` and `unit-max`; only `f01`/`f02` are quantile and
+both are *meta* features the model never sees. The real mechanism is per-file
+**min–max** — an injected value beyond a file's observed max moves `lo`/`hi`
+and rescales every row in that file.
+**Surfaced:** review, by checking `features.TRANSFORMS` against the column list.
+The fix was right for the wrong reason, which is the hardest kind to catch.
+
+### 22 — The "lower bound" ran in two directions at once
+
+The write-up said the numbers were a lower bound because the substrates were
+mostly RFI. True for **retention** — a cleaner substrate can only raise it. The
+opposite for the **paired shift**, which is largest on RFI substrates and near
+zero on the cleanest, so the pooled shift is an *upper* bound. One bound claim
+was carried over two quantities that move oppositely.
+
+### 23 — The test I ran to check validity was itself confounded
+
+Review proposed a good check: train a classifier to separate injected stamps
+from real hits of the same brightness. It returned **AUC 0.997–1.000**, which
+reads as "the model is extrapolating on every injected stamp".
+
+Two controls say it cannot mean that. Real hits against *other* real hits at
+matched brightness give **0.479–0.499**, so the method works. But real **faint**
+hits against real **bright** hits give **1.000** — with no injection at all. A
+faint stamp is already perfectly separable from a bright one on these twelve
+features, and every injection sits on a faint substrate.
+
+So the check cannot attribute the separability to the signal model, and the
+validity ceiling is **unresolved rather than established**. Reported as such.
+The lesson is narrow and useful: a control that returns the expected floor does
+not make a comparison unconfounded.
+
+---
+
 ## The tally
 
 | | |
@@ -246,6 +331,8 @@ multiplier.
 | rejected by measuring them | **3** |
 | shipped without meeting its acceptance criterion | 1 |
 | unambiguous wins | 1 — from the backlog, on the last night |
+| **of that win's published conclusions, later withdrawn** | **4 of 8** |
 | defects where the record disagreed with the computation | **3** |
-| defects found by adversarial review rather than by us | 6 |
-| tests that could not have failed | 2 |
+| defects found by adversarial review rather than by us | **6** |
+| tests that could not have failed | **3** |
+| claims I listed as *safe as stated* that were not | **1** |

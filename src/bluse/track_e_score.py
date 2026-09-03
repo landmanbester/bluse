@@ -242,6 +242,102 @@ def fit_score(df, *, features="stamp", n_splits=5, seed=0, n_seeds=3,
     }
     return score, fold, info
 
+
+
+def fold_models(df, *, features="stamp", n_splits=5, seed=0, n_seeds=3,
+                exclude_mk=True, max_iter=300):
+    """
+    The fitted ensemble plus the map from observation to fold, so NEW data can
+    be scored by a model that never saw its observation.
+
+    `fit_score` scores the rows it trains on and throws the models away, which
+    is right for a one-pass pipeline and useless for injections: an injected
+    stamp is built ON TOP of a real hit, and that hit is in the training set.
+    Scoring it with a model that trained on its own substrate would leak the
+    substrate's morphology into the answer -- exactly the mistake the group
+    split exists to prevent, arriving through a side door.
+
+    Returns (models, fold_of_group):
+      models[k]         list of n_seeds fitted models for fold k
+      fold_of_group[g]  the fold that HELD OUT observation g
+
+    Score a new stamp derived from a hit in observation g with
+    `models[fold_of_group[g]]`, averaged. `predict_held_out` does that.
+    """
+    cols = feature_columns(features)
+    missing = [c for c in cols + ["weak_label", "group_id"] if c not in df.columns]
+    if missing:
+        raise ValueError(f"missing columns: {missing}")
+    X = df[cols].to_numpy(FEATURE_DTYPE)
+    y = df["weak_label"].to_numpy().astype(np.int8)
+    groups = df["group_id"].to_numpy()
+
+    # Same all-NaN drop as fit_score. Without it the two functions train on
+    # different matrices whenever a column is empty -- reachable, since
+    # f08_turning_bw_hz is unresolved for ~72% of hits -- and the harness stops
+    # measuring the shipped model. Flagged by review on PR #3 and pinned by
+    # test_predict_held_out_agrees_exactly_with_fit_score.
+    usable = np.isfinite(X).any(axis=0)
+    dropped = [c for c, ok in zip(cols, usable) if not ok]
+    if dropped:
+        print(f"  WARNING: dropping {len(dropped)} all-NaN feature column(s): "
+              f"{', '.join(dropped)}")
+        if not usable.any():
+            raise ValueError("every feature column is non-finite")
+        X = X[:, usable]
+
+    train = y >= 0
+    if exclude_mk and "file" in df.columns:
+        train &= ~df["file"].isin(PREFILTERED_FILES).to_numpy()
+    tr_idx = np.flatnonzero(train)
+    if len(np.unique(y[train])) < 2:
+        raise ValueError("training rows carry only one class")
+    n_groups = len(np.unique(groups[train]))
+    if n_groups < n_splits:
+        raise ValueError(f"{n_groups} groups is fewer than n_splits={n_splits}")
+
+    models, fold_of_group = {}, {}
+    splits = GroupKFold(n_splits).split(tr_idx, y[tr_idx], groups[tr_idx])
+    for k, (tr, te) in enumerate(splits):
+        models[k] = [
+            HistGradientBoostingClassifier(
+                max_iter=max_iter, early_stopping=False, random_state=sd
+            ).fit(X[tr_idx[tr]], y[tr_idx[tr]])
+            for sd in range(seed, seed + n_seeds)]
+        for g in np.unique(groups[tr_idx[te]]):
+            fold_of_group[g] = k
+    return models, fold_of_group
+
+
+def predict_held_out(models, fold_of_group, X, groups, *, default_fold=0):
+    """
+    Score rows with the fold ensemble that held their observation out.
+
+    Returns (scores, fold_used, n_fallback). `fold_used` is NEGATIVE for a row
+    whose observation is absent from `fold_of_group` -- possible if it
+    contributed no labelled rows -- so the caller can exclude those rows from a
+    headline instead of discovering afterwards that a run-level count offered no
+    way to. Silently scoring such a row with a model that may have seen it is
+    the kind of thing that turns into a retracted number.
+
+    Predicts a fold at a time rather than a row at a time: the row-wise version
+    made ~119,000 single-row predict_proba calls on the first injection run.
+    """
+    X = np.asarray(X, dtype=FEATURE_DTYPE)
+    groups = np.asarray(groups)
+    out = np.empty(len(X))
+    fold_used = np.empty(len(X), dtype=np.int16)
+
+    mapped = np.array([fold_of_group.get(g, -1) for g in groups])
+    n_fallback = int((mapped < 0).sum())
+    for k in np.unique(mapped):
+        rows = np.flatnonzero(mapped == k)
+        ms = models[default_fold if k < 0 else k]
+        out[rows] = np.mean([m.predict_proba(X[rows])[:, 1] for m in ms], axis=0)
+        fold_used[rows] = k
+    return out, fold_used, n_fallback
+
+
 # ---------------------------------------------------------------------------
 # validation
 # ---------------------------------------------------------------------------

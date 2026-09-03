@@ -342,3 +342,74 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# --- injections -------------------------------------------------------------
+
+def fig_injection_retention(inj, control, path, keep_below=0.10,
+                            prune_above=0.90):
+    """
+    Two panels, one substrate class: what a cut KEEPS and what it PRUNES.
+
+    The first version of this figure showed only the keep side, which is how a
+    published claim that "pruning is unaffected" survived a run that in fact
+    prunes 91% of bright zero-drift injections. Both panels or neither.
+
+    Not a dual axis: two quantities on different scales sharing an x, drawn as
+    small multiples. Drift is three series because it is the dominant variable,
+    each direct-labelled -- aqua sits below 3:1 on this surface, so the relief
+    rule applies to all of them.
+
+    `inj` needs columns injected_snr, drift_hz_s, retained, pruned, dedoppler;
+    `control` is a dict with the same two rates for the un-injected substrates.
+    """
+    plt = _rc()
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(7.6, 6.2), sharex=True,
+                                 height_ratios=[1, 1])
+    _clean(a1); _clean(a2)
+    colours = (BLUE, ORANGE, AQUA)
+    drifts = sorted(inj["drift_hz_s"].unique(), reverse=True)
+
+    for ax, col, base, title, ylab in (
+            (a1, "retained", control["retained"],
+             f"kept by a cut at {keep_below:g}", "fraction kept"),
+            (a2, "pruned", control["pruned"],
+             f"discarded by the pruning cut at {prune_above:g}",
+             "fraction pruned")):
+        ax.axhline(base, color=GREY, linewidth=1.6, zorder=1)
+        # Anchored where the series are not: the keep curves start near the
+        # control and the prune curves end far above it.
+        anchor = (inj["injected_snr"].max() if col == "retained"
+                  else inj["injected_snr"].min())
+        ax.annotate(f"nothing injected — {base:.0%}", (anchor, base),
+                    textcoords="offset points",
+                    xytext=(-4, 7) if col == "retained" else (2, 7),
+                    ha="right" if col == "retained" else "left",
+                    fontsize=9, color=MUTED)
+        for drift, c in zip(drifts, colours):
+            g = inj[inj.drift_hz_s == drift].sort_values("injected_snr")
+            ax.plot(g["injected_snr"], g[col], "-o", color=c, linewidth=2,
+                    ms=7, mec=SURFACE, mew=2, zorder=3)
+            last = g.iloc[-1]
+            ax.annotate(f"{drift:g} Hz/s", (last["injected_snr"], last[col]),
+                        textcoords="offset points", xytext=(10, 0), va="center",
+                        fontsize=9.5, color=INK, fontweight="bold")
+        ax.set_ylim(0, 1.02)
+        ax.set_ylabel(ylab)
+        ax.set_title(title, fontsize=11)
+
+    snrs = sorted(inj["injected_snr"].unique())
+    ded = (inj.groupby("injected_snr")["dedoppler"].mean()
+           .reindex(snrs).to_numpy())
+    a2.set_xscale("log")
+    a2.set_xticks(snrs)
+    a2.set_xticklabels([f"{v:g}\n≈{d:.0f}" for v, d in zip(snrs, ded)],
+                       fontsize=9)
+    a2.set_xlim(min(snrs) * 0.85, max(snrs) * 1.6)
+    a2.set_xlabel("injected matched-filter SNR   ·   ≈ catalogue-style SNR below")
+    fig.suptitle("On single-beam substrates, a bright signal is pruned, not kept",
+                 x=0.012, ha="left", fontsize=12.5, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path

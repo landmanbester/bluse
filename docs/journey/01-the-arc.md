@@ -1,10 +1,11 @@
 # The arc — three days
 
-**31 August to 2 September 2026. 78 commits. 2,014,055 narrowband hits from
-seven MeerKAT files.**
+**31 August to 3 September 2026. 2,014,055 narrowband hits from seven MeerKAT
+files.**
 
 The shape of it, before the detail: **two days making the measurements
-trustworthy, one evening getting the result.** That ratio is the story.
+trustworthy, one evening getting a result, and one day discovering how much of
+that result was wrong.** That ratio is the story.
 
 ---
 
@@ -175,3 +176,53 @@ A fitted decision boundary has no reason to interpolate.
 The night still produced six more wrong turns, three of them in the last two
 hours. They are in [`02-wrong-turns.md`](02-wrong-turns.md), and the last two
 are the ones worth reading.
+
+---
+
+## Day 3 — Wednesday 3 September: the day the result was audited
+
+Track E's own write-up had named the missing piece: *"every number measures
+agreement with the spatial filter, which is a good instrument and not truth."*
+So the last day went to **synthetic injections** — putting signals we built
+ourselves into real stamps, which is the only ground truth this archive can
+supply.
+
+Building the harness turned up something about the pipeline nobody had noticed.
+Chasing a 0.070 measurement floor: re-extraction was exact, so the floor had to
+be normalisation; interpolating on the stored curve cut it to 0.127, still
+wrong; the residual was one raw value mapping to two normalised values, which
+should be impossible. **It is possible because `normalise()` is called per
+file** — `bluse-features` runs it inside `extract()` and `summarise()`
+concatenates without re-normalising, so every `_n` column is a rank within its
+own file rather than within the survey. Per-file interpolation is exact.
+
+Then the first result, and it looked decisive: *a cut at the shipped threshold
+keeps at most 43% of injected real signals.* Written up, pushed, PR opened.
+
+**Then the review, and both headline numbers fell.**
+
+Copilot found the SNR formula was not the matched filter — a unit-weight
+numerator with a matched-filter denominator, delivering 14.19 when asked for 20.
+The test that should have caught it asserted the algebraic inverse of the
+function under test, so it could not fail.
+
+The human reviewer found the substrate set was **42% confirmed multi-beam
+RFI** — `select_substrates` filtered on SNR alone, and low SNR does not imply
+few beams. The 43% was a composition effect. Stratified, on the population the
+score is actually deployed on, retention is 0.72.
+
+And the claim listed under *safe as stated* in my own summary — "pruning is
+unaffected" — turned out never to have been measured. Measured: at catalogue
+SNR ≈51 with no drift, **91% of injected real signals are pushed above the
+pruning threshold.** A bright non-drifting sky signal would be actively
+discarded.
+
+Re-running it properly reversed two more conclusions. The high-SNR collapse is
+**not** an artefact of a noiseless injection — a Gamma-fluctuating version
+reproduces it to within a few points. And the shipped `shortlist_below=0.1`,
+which the first write-up called "not a defensible operating point", turns out
+to be **the best of every threshold swept**, by injected signal kept per
+survivor admitted.
+
+The day's last finding was a data-handling one, and it is still open:
+`AGENTS.md` said *"the repository is private for that reason"*. It is not.

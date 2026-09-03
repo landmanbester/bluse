@@ -65,6 +65,7 @@ Either way you get five commands:
 | `bluse-bench` | Cluster Bench: interactive clustering in the browser |
 | `bluse-score` | Track E: a morphology-only RFI score for every hit |
 | `bluse-score-plots` | redraw the Track E figures from an existing report |
+| `bluse-inject` | synthetic signal injection — the only ground truth available |
 
 All of them take `--help`.
 
@@ -534,9 +535,9 @@ Still open, in rough priority order:
   for tuning the method toward a signal type by example.
 - **Tracks C and D** — Astronomaly-style active learning, and self-supervised
   representations. See `brainstorming.md`.
-- **Synthetic injections.** The only true objective function available: every
-  Track E number measures agreement with the spatial filter, which is a good
-  instrument and not ground truth.
+- **More injection arms.** The first synthetic injections landed 2026-09-03
+  (see below); what they left open is a substrate-fixed discriminator, a
+  bandwidth sweep, and crop-retained signal power per setting.
 
 *(Track E landed 2026-09-03 — see below. `uhf_long.h5` and `lband_short.h5`
 were re-delivered repaired on 2026-09-02, so the "clean file" item is closed.)*
@@ -604,10 +605,15 @@ document has the measurement, and the control that pins the mechanism.
 | `ambiguous.csv` | 411,898 hits in 3–31 beams, where the filter abstains |
 | `all_scores.parquet` | `rfi_score` on all 2,014,055 hits |
 
-**A high score is strong evidence of RFI. A low score is not evidence of a
-technosignature** — the labels are positive-unlabelled, and the 524-hit
-shortlist collapses to 48 frequency groups whose stamps show two *instrumental*
-populations. See
+**A high score is strong evidence of RFI *at moderate brightness*. A low score
+is not evidence of a technosignature** — the labels are positive-unlabelled,
+and the 524-hit shortlist collapses to 48 frequency groups whose stamps show
+two *instrumental* populations.
+
+**At high brightness the score inverts, and this is measured.** Synthetic
+injections ([`docs/injections-2026-09.md`](docs/injections-2026-09.md)) show a
+real signal at catalogue SNR ≈51 with no drift is pushed above the *pruning*
+threshold **91%** of the time. Run them with `bluse-inject --fluctuate`. See
 [`NOMENCLATURE.md`](NOMENCLATURE.md#rfi-score) before quoting any of it.
 
 ## Licence
